@@ -143,6 +143,7 @@ gcc -O2 -Wall -Wextra -I firmware/app firmware/tools/test_ground_point.c firmwar
 gcc -O2 -Wall -Wextra -I firmware/app firmware/tools/test_paogi.c firmware/app/paogi.c -lm -o temp/test_paogi && temp/test_paogi
 gcc -O2 -Wall -Wextra -I firmware/app -I firmware/drivers/flow_io -I common firmware/app/flow_nav.c firmware/tools/test_flow_nav.c -lm -o temp/test_flow_nav && temp/test_flow_nav
 gcc -O2 -Wall -Wextra -I common firmware/tools/test_flow_link.c -o temp/test_flow_link && temp/test_flow_link
+gcc -O2 -Wall -Wextra -I firmware/app firmware/tools/test_speed_ppm.c firmware/app/speed_ppm.c -lm -o temp/test_speed_ppm && temp/test_speed_ppm
 gcc -O2 -Wall -Wextra -I firmware/app firmware/tools/test_geoid.c firmware/app/geoid.c firmware/app/geoid_grid.c -lm -o temp/test_geoid && temp/test_geoid geoid/SWEN17_RH2000.txt
 ```
 

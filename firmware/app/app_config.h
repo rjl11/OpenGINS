@@ -384,11 +384,17 @@
 #define APP_FLOW_MIN_FEATURES       15u
 
 /* Wheel / ground-speed pulses (plans/wheel-odometry-aiding.md). The internal
- * pull-up suits an open-collector output (opto stage, Hall sensor); the
- * raw pulses-per-metre figure in the status report needs at least this GNSS
- * speed. ISO 11786 nominal: 130 pulses per metre. */
+ * pull-up suits an open-collector output (opto stage, Hall sensor). The raw
+ * pulses-per-metre figure in the status report (speed_ppm.h) is input A's
+ * rising edges over the GNSS distance between the first and last of them:
+ * every epoch of the run at least MIN_MPS, the run at least MIN_SPAN_S and
+ * MIN_EDGES pulses, shown for HOLD_S after its last edge. ISO 11786 nominal:
+ * 130 pulses per metre. */
 #define APP_SPEED_PULL_UP           1
 #define APP_SPEED_PPM_MIN_MPS       1.0f
+#define APP_SPEED_PPM_MIN_SPAN_S    5.0f
+#define APP_SPEED_PPM_MIN_EDGES     10u
+#define APP_SPEED_PPM_HOLD_S        10.0f
 #define APP_SPEED_ISO11786_PPM      130.0f
 
 /* Core 1 stack. nav_suite_update() needs about 13 KB worst case. */

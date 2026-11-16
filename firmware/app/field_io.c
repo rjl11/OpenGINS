@@ -8,6 +8,7 @@
 #include "flow_nav.h"
 #include "nav_core1.h"
 #include "pulse_in.h"
+#include "speed_ppm.h"
 #include "usb_log.h"
 
 /* ---- speed input -------------------------------------------------------- */
@@ -18,8 +19,6 @@ static const int8_t k_gray_idx[4] = { 0, 1, 3, 2 };
 typedef struct {
     uint32_t rising[2], edges[2];
     uint32_t fwd, rev, bad; /* quadrature steps */
-    float    gnss_speed_sum;
-    uint32_t gnss_n, gnss_slow;
 } speed_win_t;
 
 static speed_win_t s_sw;                 /* current window */
@@ -28,11 +27,18 @@ static struct {
     float    edge_hz[2];
     uint32_t fwd, rev, bad;
     bool     quad;                       /* B moves in quadrature with A */
-    float    gnss_mps;                   /* mean GNSS speed over the window */
+    float    gnss_mps;                   /* mean GNSS speed over the last run */
+    float    ppm_span_s;                 /* that run, first to last edge */
     bool     ppm_valid;
-    float    ppm;                        /* A rising edges per metre */
+    float    ppm;                        /* A rising edges per metre, edge-timed (speed_ppm.h) */
     uint32_t overflows;
 } s_sp;
+static speed_ppm_t s_ppm;
+static uint64_t s_ppm_t_us;              /* last result's end edge, 0 = none */
+static uint32_t s_ppm_overflows;         /* pulse_in overflows the run has seen */
+
+/* Both inputs start enabled in field_io_init(); the settings turn them off. */
+static bool s_flow_on = true, s_wheel_on = true;
 static uint8_t s_last_lv;
 static bool s_have_lv;
 
@@ -43,6 +49,7 @@ static void speed_edge(const pulse_edge_t *e)
     s_sw.edges[ch]++;
     if (lv & (1u << ch)) {
         s_sw.rising[ch]++;
+        if (ch == 0) speed_ppm_edge(&s_ppm, e->t_us);
     }
     if (s_have_lv) {
         int d = (k_gray_idx[lv] - k_gray_idx[s_last_lv]) & 3;
@@ -57,13 +64,22 @@ static void speed_edge(const pulse_edge_t *e)
 
 void field_io_gnss(const um980_nav_t *g)
 {
-    if (!g->vel_usable) {
+    if (!s_wheel_on) {
         return;
     }
-    s_sw.gnss_speed_sum += (float)g->hor_speed_mps;
-    s_sw.gnss_n++;
-    if (g->hor_speed_mps < APP_SPEED_PPM_MIN_MPS) {
-        s_sw.gnss_slow++;
+    /* Lost edges break the count: start the run over. */
+    pulse_in_stats_t ps;
+    pulse_in_stats(&ps);
+    if (ps.overflows != s_ppm_overflows) {
+        s_ppm_overflows = ps.overflows;
+        speed_ppm_reset(&s_ppm);
+    }
+    speed_ppm_result_t r;
+    if (speed_ppm_gnss(&s_ppm, g->t_valid_us, g->hor_speed_mps, g->vel_usable, &r)) {
+        s_sp.ppm = r.ppm;
+        s_sp.gnss_mps = r.mps;
+        s_sp.ppm_span_s = r.span_s;
+        s_ppm_t_us = r.t_end_us;
     }
 }
 
@@ -96,6 +112,10 @@ void field_io_init(void)
 {
     const pulse_in_config_t pc = { .pin_a = PIN_SPEED_A, .pin_b = PIN_SPEED_B, .pull_up = APP_SPEED_PULL_UP };
     pulse_in_init(&pc);
+    const speed_ppm_config_t sc = {
+        .min_mps = APP_SPEED_PPM_MIN_MPS, .min_span_s = APP_SPEED_PPM_MIN_SPAN_S, .min_edges = APP_SPEED_PPM_MIN_EDGES,
+    };
+    speed_ppm_init(&s_ppm, &sc);
 
     const flow_io_config_t fc = {
         .rx_pin = PIN_FLOW_RX, .trigger_pin = PIN_FLOW_TRIGGER, .strobe_pin = PIN_FLOW_STROBE,
@@ -122,9 +142,6 @@ void field_io_init(void)
            PIN_FLOW_TRIGGER, (unsigned)APP_FLOW_TRIGGER_HZ, PIN_FLOW_STROBE);
 }
 
-/* Both inputs start enabled in field_io_init(); the settings turn them off. */
-static bool s_flow_on = true, s_wheel_on = true;
-
 void field_io_apply_settings(const settings_t *s)
 {
     const bool flow = s->sensor_flow != 0, wheel = s->sensor_wheel != 0;
@@ -140,6 +157,8 @@ void field_io_apply_settings(const settings_t *s)
     }
     if (wheel != s_wheel_on) {
         pulse_in_set_enabled(wheel);
+        speed_ppm_reset(&s_ppm);
+        s_ppm_t_us = 0;
         s_wheel_on = wheel;
     }
     flow_nav_set_geometry(&s_fn, s->flow_height_m, s->flow_cam_yaw_deg * 0.017453293f, s->flow_leverarm_m);
@@ -225,14 +244,8 @@ void field_io_roll(uint64_t now)
     s_sp.rev = s_sw.rev;
     s_sp.bad = s_sw.bad;
     s_sp.quad = s_sw.edges[1] > 0 && s_sw.fwd + s_sw.rev > 4u * (s_sw.bad + 1u);
-    s_sp.ppm_valid = false;
-    if (s_sw.gnss_n > 0) {
-        s_sp.gnss_mps = s_sw.gnss_speed_sum / (float)s_sw.gnss_n;
-        if (s_sw.gnss_slow == 0 && s_sp.hz[0] > 0.0f) {
-            s_sp.ppm = s_sp.hz[0] / s_sp.gnss_mps;
-            s_sp.ppm_valid = true;
-        }
-    }
+    /* The last edge-timed figure, while it is recent. */
+    s_sp.ppm_valid = s_ppm_t_us != 0 && now - s_ppm_t_us < (uint64_t)(APP_SPEED_PPM_HOLD_S * 1e6f);
     pulse_in_stats_t ps;
     pulse_in_stats(&ps);
     s_sp.overflows = ps.overflows;
@@ -260,8 +273,8 @@ static void print_speed(void)
                (unsigned long)s_sp.fwd, (unsigned long)s_sp.rev, (unsigned long)s_sp.bad);
     }
     if (s_sp.ppm_valid) {
-        printf("  %.1f pulses/m at GNSS %.2f m/s (raw, no turn correction; ISO 11786: %.0f)", (double)s_sp.ppm,
-               (double)s_sp.gnss_mps, (double)APP_SPEED_ISO11786_PPM);
+        printf("  %.2f pulses/m at GNSS %.2f m/s over %.1f s (raw, no turn correction; ISO 11786: %.0f)",
+               (double)s_sp.ppm, (double)s_sp.gnss_mps, (double)s_sp.ppm_span_s, (double)APP_SPEED_ISO11786_PPM);
     }
     if (s_sp.overflows) {
         printf("  edges lost %lu", (unsigned long)s_sp.overflows);
@@ -346,8 +359,9 @@ void field_io_json(jw_t *w)
         jw_str(w, "direction", s_sp.fwd >= s_sp.rev ? "forward" : "reverse");
     }
     if (s_sp.ppm_valid) {
-        jw_num(w, "pulses_per_m", (double)s_sp.ppm, 1);
+        jw_num(w, "pulses_per_m", (double)s_sp.ppm, 2);
         jw_num(w, "gnss_mps", (double)s_sp.gnss_mps, 2);
+        jw_num(w, "ppm_span_s", (double)s_sp.ppm_span_s, 1);
     } else {
         jw_null(w, "pulses_per_m");
     }

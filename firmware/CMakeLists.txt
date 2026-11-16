@@ -41,6 +41,7 @@ add_executable(app
     app/imu_calib_mag.c
     app/imu_calib_rot.c
     app/field_io.c
+    app/speed_ppm.c
     app/flow_nav.c
     app/geoid.c
     app/geoid_grid.c
