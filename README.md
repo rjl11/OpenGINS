@@ -6,13 +6,13 @@
 
 OpenGINS is GNSS and IMU fusion firmware for a navigation unit meant to be universal: an agricultural unit for a tractor (AgOpenGPS / AgOpenWeb), a GNSS survey pole, and a UAV. The design is one board and one filter for all three; the platform setting picks how the sensors are used.
 
-The unit combines a Unicore UM980 / UM982 GNSS receiver, a TM210 / TM171 IMU, a BMP581 barometer and optional wheel and / or optical-flow speed in the [INSLIB](https://github.com/jnz/INSLIB) `nav_suite` filter. It runs on a Raspberry Pi Pico 2 W (RP2350) in bare metal. The filter runs on core 1; core 0 handles the sensor UARTs, Bluetooth and the Wi-Fi configuration page.
+The unit combines a Unicore UM980 / UM982 GNSS receiver, a TM210 IMU (a TM171 takes the same configuration; so far checked over USB on the bench only, see [plans/imu-tm210-config.md](plans/imu-tm210-config.md)), a BMP581 barometer and optional optical-flow speed in the [INSLIB](https://github.com/jnz/INSLIB) `nav_suite` filter. Wheel speed pulses are captured and logged but not fused yet (see [plans/wheel-odometry-aiding.md](plans/wheel-odometry-aiding.md)). It runs on a Raspberry Pi Pico 2 W (RP2350) in bare metal. The filter runs on core 1; core 0 handles the sensor UARTs, Bluetooth and the Wi-Fi configuration page.
 
 The firmware also reports the height above sea level (RH 2000) next to the ellipsoid height, using Lantmäteriet's SWEN17_RH2000 geoid model cut to an area around the RTK base. See [Geoid heights](#geoid-heights).
 
 ## Status
 
-Work in progress. The firmware builds, and its parts have been tested on the bench: sensor bring-up, the filter's output, the web page, and the wheel-speed pulse capture. The optical-flow path is written and tested with synthetic frames but has not yet run with a camera. The whole system has not yet been tested end to end in a vehicle. There are no automated tests; the host-side C tests in `firmware/tools/` cover the calibration, speed and geoid code. Open items are listed in [TODO.md](TODO.md).
+Work in progress. The firmware builds, and its parts have been tested on the bench: sensor bring-up, the filter's output, the web page, and the wheel-speed pulse capture. The optical-flow path is written and tested with synthetic frames but has not yet run with a camera. The whole system has not yet been tested end to end in a vehicle. GitHub Actions builds the firmware in four configurations, checks that the core 1 path and the ISRs run from SRAM, and runs the host-side C tests in `firmware/tools/`. They cover the IMU calibration, the survey-pole aiding and mount fit, the ground point, the optical-flow speed and flow link, `$PAOGI` and the geoid code; [BUILDING.md](BUILDING.md) lists the commands. Open items are listed in [TODO.md](TODO.md).
 
 ## Hardware
 
@@ -24,6 +24,8 @@ Work in progress. The firmware builds, and its parts have been tested on the ben
 | BMP581 | Barometer, 100 Hz | I2C1 |
 | Raspberry Pi with OV9281 camera | Optical flow (optional) | Link to the Pico on a PIO UART |
 | Wheel or radar pulse input | Ground speed (optional) | Two speed inputs |
+
+The Pico configures the GNSS receiver and the IMU itself at boot, so neither needs setting up with a PC tool first. It detects whether a UM980 or a UM982 is fitted, checks the receiver's settings and sends the commands for the logs, rates and antenna mode on COM1 when they differ ([plans/gnss-um98x-config.md](plans/gnss-um98x-config.md)). The antenna mode (single, or dual with GNSS heading on a UM982) is a build default that the web page can override, applied after a reboot. The receiver's ports are never locked. The TM210 is set to send raw data at 800 Hz on UART0 at 921600 ([plans/imu-tm210-config.md](plans/imu-tm210-config.md)); the Pico never sends it calibration commands, because they only affect the TM210's own fused outputs, which aren't used.
 
 The GPIO assignments are all in [`firmware/app/board_pins.h`](firmware/app/board_pins.h). No other file names a pin number.
 
@@ -72,6 +74,7 @@ The output is `firmware/build/app.uf2`; copy it to the BOOTSEL drive. [BUILDING.
 ### Web pages
 
 Screenshots from a unit on a survey pole with an RTK fix.
+
 | Start page (phone view) | Configuration |
 |---|---|
 | <img src="docs/screenshots/web-index.png" width="300" alt="Start page: GNSS fix, filter mode, position and sensor tiles"> | <img src="docs/screenshots/web-config.png" width="500" alt="Configuration page: antenna position, platform, sensors, optical flow, filter tuning, Wi-Fi"> |
@@ -85,7 +88,7 @@ Screenshots from a unit on a survey pole with an RTK fix.
 With the platform set to tractor (`-DPLATFORM=tractor`, or on the web config page followed by a reboot), the Pico sends `$PAOGI` sentences on its USB serial port at 10 Hz. Point AgIO (AgOpenGPS) at the Pico's COM port as the GPS source. The USB port also carries the status report as text lines; readers skip lines that don't start with `$`.
 
 - **Position:** the GNSS antenna position, not the ground point, even when an antenna height is set. AgOpenGPS applies its own antenna-height and roll compensation, so a point that had already been moved would be corrected twice. The filter's position is moved from the IMU to the antenna by the lever arm.
-- **Fields:** the fix quality is the receiver's (4 RTK fixed, 5 float, 2 DGPS, 1 single), or 6 when the filter has had no fresh GNSS fix for 1 s. The heading is the INS heading and stays empty until the filter navigates; roll and pitch come from the filter's attitude. The altitude is above mean sea level.
+- **Fields:** the fix quality is the receiver's (4 RTK fixed, 5 float, 2 DGPS, 1 single), or 6 when the filter has had no fresh GNSS fix for 1 s. The heading is the INS heading and stays empty until the filter navigates and its yaw 1-sigma is below 1° (with a single antenna, that takes some driving); roll and pitch come from the filter's attitude. The altitude is above mean sea level.
 - **On and off:** send `paogi off` on the USB port to stop the sentences and `paogi on` to start them again. They pause while the field log (`log on`) runs.
 - **Heading source:** in AgOpenGPS / AgOpenWeb, set the heading source to dual with a heading offset of 0, because `$PAOGI` counts as a dual-antenna sentence and its heading is already the vehicle heading.
 

@@ -1,0 +1,55 @@
+# A version tag (v*) builds the firmware with build.yml (all configurations,
+# the SRAM check and the host tests) and publishes a GitHub release with one
+# .uf2 per configuration. Only the two newest releases are kept; older ones
+# are deleted, but their tags stay.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: firmware-*
+          path: artifacts
+
+      - name: Name the .uf2 files after the tag and configuration
+        run: |
+          mkdir -p release
+          for dir in artifacts/firmware-*; do
+            config="${dir#artifacts/firmware-}"
+            cp "$dir/app.uf2" "release/opengins-${TAG}-${config}.uf2"
+          done
+          ls -l release
+
+      - name: Create the release
+        run: |
+          gh release create "$TAG" release/*.uf2 --title "$TAG" --generate-notes --verify-tag
+
+      - name: Keep only the two newest releases
+        run: |
+          gh release list --limit 100 --json tagName,createdAt \
+            --jq 'sort_by(.createdAt) | reverse | .[2:] | .[].tagName' |
+          while read -r old; do
+            echo "deleting release $old (the tag stays)"
+            gh release delete "$old" --yes
+          done

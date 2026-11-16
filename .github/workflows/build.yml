@@ -1,5 +1,6 @@
 # Builds the Pico firmware in a few configurations, checks that the core 1
 # path and the ISRs stay in SRAM, and runs the host tests (BUILDING.md).
+# release.yml calls it for version tags.
 name: build
 
 on:
@@ -7,6 +8,7 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 env:
   PICO_SDK_VERSION: "2.3.1"

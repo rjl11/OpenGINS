@@ -4,6 +4,7 @@
  *       firmware/app/paogi.c -lm -o temp/test_paogi
  *   temp/test_paogi
  */
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -36,6 +37,144 @@ static void expect(const char *name, const paogi_fix_t *f, const char *body)
     int commas = 0;
     for (size_t i = 0; i < blen; i++) commas += buf[i] == ',';
     CHECK(commas == 15, "%s: %d fields, want 15", name, commas);
+}
+
+#define NEAR(a, b, tol) (fabs((double)(a) - (double)(b)) <= (tol))
+
+/* The filter navigating with a fresh RTK fix, level, heading 90 deg. */
+static paogi_in_t base_in(void)
+{
+    paogi_in_t in;
+    memset(&in, 0, sizeof in);
+    in.have_pos = true;
+    in.pos_from_ins = true;
+    in.ant_lat_deg = 59.5;
+    in.ant_lon_deg = 17.25;
+    in.ant_h_ell_m = 60.0;
+    in.have_undulation = true;
+    in.undulation_m = 30.0f;
+    in.have_nav = true;
+    in.tow_ms = (2u * 86400u + 12u * 3600u) * 1000u; /* Tuesday 12:00:00 GPS */
+    in.leap_s = 18;
+    in.sats = 20;
+    in.rx_quality = 4;
+    in.diff_age_s = 1.0f;
+    in.gnss_fresh = true;
+    in.hdop_valid = true;
+    in.hdop = 0.7f;
+    in.ins_vel_valid = true;
+    in.vel_n_mps = 3.0f;
+    in.vel_e_mps = 4.0f;
+    in.rx_speed_valid = true;
+    in.rx_speed_mps = 9.0f;
+    in.att_valid = true;
+    in.yaw_rad = M_PI / 2.0;
+    in.heading_ok = true;
+    in.yaw_sd_deg = 0.3f;
+    in.heading_max_sd_deg = 1.0f;
+    return in;
+}
+
+static void test_fill(void)
+{
+    paogi_fix_t f;
+    paogi_in_t in = base_in();
+
+    /* Navigating with fresh RTK: the receiver's quality, the filter's speed,
+     * UTC = GPS - leap, MSL = ellipsoid - undulation. */
+    paogi_fill(&in, &f);
+    CHECK(f.pos_valid && f.quality == 4, "fresh: quality %d", f.quality);
+    CHECK(NEAR(f.alt_msl_m, 30.0, 1e-9), "alt %f", f.alt_msl_m);
+    CHECK(f.speed_valid && NEAR(f.speed_mps, 5.0, 1e-6), "ins speed %f", f.speed_mps);
+    CHECK(f.time_valid && f.utc_ms == (11u * 3600u + 59u * 60u + 42u) * 1000u, "utc %u", (unsigned)f.utc_ms);
+    CHECK(f.heading_valid && NEAR(f.heading_deg, 90.0, 1e-4), "heading %f", f.heading_deg);
+    CHECK(f.sats == 20 && NEAR(f.hdop, 0.7, 1e-6) && NEAR(f.age_s, 1.0, 1e-6), "sats/hdop/age");
+
+    /* The filter output 250 ms after the epoch moves the time on. */
+    in.ins_dt_ms = 250;
+    paogi_fill(&in, &f);
+    CHECK(f.utc_ms == (11u * 3600u + 59u * 60u + 42u) * 1000u + 250u, "utc + dt %u", (unsigned)f.utc_ms);
+
+    /* Early on Sunday the leap seconds wrap into the previous day. */
+    in = base_in();
+    in.tow_ms = 10000u;
+    paogi_fill(&in, &f);
+    CHECK(f.utc_ms == 86392000u, "wrap utc %u", (unsigned)f.utc_ms);
+
+    /* No fresh receiver position while the filter runs on: 6, no age. */
+    in = base_in();
+    in.gnss_fresh = false;
+    paogi_fill(&in, &f);
+    CHECK(f.quality == 6 && f.age_s < 0.0f, "coasting: quality %d age %f", f.quality, f.age_s);
+
+    /* Receiver fallback (filter not navigating): the receiver's quality,
+     * even when not fresh by the 1 s rule; its speed; no heading. */
+    in = base_in();
+    in.pos_from_ins = false;
+    in.gnss_fresh = false;
+    in.rx_quality = 5;
+    paogi_fill(&in, &f);
+    CHECK(f.quality == 5 && !f.heading_valid, "fallback: quality %d heading %d", f.quality, f.heading_valid);
+    CHECK(f.speed_valid && NEAR(f.speed_mps, 9.0, 1e-6), "fallback speed %f", f.speed_mps);
+    CHECK(f.att_valid, "fallback keeps roll and pitch");
+
+    /* No position: quality 0 and no position fields. */
+    in = base_in();
+    in.have_pos = false;
+    in.pos_from_ins = false;
+    in.rx_speed_valid = false;
+    paogi_fill(&in, &f);
+    CHECK(!f.pos_valid && f.quality == 0 && !f.speed_valid, "none: quality %d", f.quality);
+
+    /* No live attitude: no roll, pitch or heading. */
+    in = base_in();
+    in.att_valid = false;
+    paogi_fill(&in, &f);
+    CHECK(!f.att_valid && !f.heading_valid, "no attitude");
+
+    /* Yaw not from the INS in FULL / COASTING: roll and pitch, no heading. */
+    in = base_in();
+    in.heading_ok = false;
+    paogi_fill(&in, &f);
+    CHECK(f.att_valid && !f.heading_valid, "ahrs yaw sent as heading");
+
+    /* INS yaw too uncertain (single antenna, not driven yet), or its
+     * uncertainty unknown: roll and pitch, no heading. At the limit: sent. */
+    in = base_in();
+    in.yaw_sd_deg = 5.0f;
+    paogi_fill(&in, &f);
+    CHECK(f.att_valid && !f.heading_valid, "uncertain yaw sent as heading");
+    in.yaw_sd_deg = -1.0f;
+    paogi_fill(&in, &f);
+    CHECK(!f.heading_valid, "unknown yaw sd sent as heading");
+    in.yaw_sd_deg = 1.0f;
+    paogi_fill(&in, &f);
+    CHECK(f.heading_valid, "yaw sd at the limit not sent");
+
+    /* Yaw rate: a right turn at 0.2 rad/s banked 30 deg right shows up as
+     * q = 0.2 sin 30, r = 0.2 cos 30 in FRD, and comes back as +11.46 deg/s.
+     * The bias is taken off first. */
+    in = base_in();
+    double roll = 30.0 / 57.29577951308232, w = 0.2;
+    in.roll_rad = roll;
+    in.gyr_n = 80;
+    in.gyr_sum[1] = 80 * (w * sin(roll) + 0.01);
+    in.gyr_sum[2] = 80 * (w * cos(roll) - 0.02);
+    in.bias_valid = true;
+    in.gyr_bias[1] = 0.01f;
+    in.gyr_bias[2] = -0.02f;
+    paogi_fill(&in, &f);
+    CHECK(NEAR(f.yaw_rate_dps, w * 57.29577951308232, 1e-3), "yaw rate %f", f.yaw_rate_dps);
+
+    /* A left turn is negative; no gyro samples give 0. */
+    in.gyr_sum[1] = -80 * w * sin(roll);
+    in.gyr_sum[2] = -80 * w * cos(roll);
+    in.bias_valid = false;
+    paogi_fill(&in, &f);
+    CHECK(NEAR(f.yaw_rate_dps, -w * 57.29577951308232, 1e-3), "left yaw rate %f", f.yaw_rate_dps);
+    in.gyr_n = 0;
+    paogi_fill(&in, &f);
+    CHECK(f.yaw_rate_dps == 0.0f, "no gyro: %f", f.yaw_rate_dps);
 }
 
 int main(void)
@@ -80,6 +219,8 @@ int main(void)
     /* Too small a buffer. */
     char small[20];
     CHECK(paogi_format(&f, small, sizeof small) == 0 && small[0] == '\0', "small buffer accepted");
+
+    test_fill();
 
     if (s_fail) {
         printf("%d check(s) failed\n", s_fail);

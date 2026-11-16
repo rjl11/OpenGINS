@@ -137,6 +137,17 @@ An independent source for the same protocol: the AiO v4.5 autosteer firmware at 
 - **A guard worth copying as an idea:** before any write they check that bit 13 = 1, bits 14–16 = 2 and the baud word matches the rate they are talking at. If not, they report "layout not recognised" and write nothing. The same check in our provision step would stop a write to a TM210 firmware with a different layout.
 - **Baud scan:** they scan 460800, 230400, 921600, 57600, 38400 and 9600 after 115200.
 
+### Bench check: our TM171 over USB (2026-11-16)
+A TM171 on dietpi's USB (STM32 virtual COM port `0483:5740`, `/dev/ttyACM2`), driven from Python with the same packets the `tm210` driver sends. The target Setting went to RAM only (bit 18 = 0), and the original Setting was written back to RAM afterwards; flash was never written. Over USB the baud word has no effect, so the UART at 921600 and the flash commit with its power cycle are **not tested**, and neither is the driver itself running on the Pico.
+
+- **Node ID 125.** It answers Setting and Status requests sent to ID 0 or to 125, in 11–17 ms (30 of 30 answered). In the first probe, five requests in a row got no reply; that didn't happen again.
+- **As delivered:** Status (CMD 22) and RPY (CMD 35) at 25 Hz each, no raw object. The RPY payload is **16 bytes** (timestamp and three floats), not the 20 the AiO v26 parser expects.
+- **Setting read:** `3f a8 18 00 00 00 80 04 c4 09 5e 01 0a 00 0a 00 01 00 19 00`. Switches `0x0018a83f`: bit 13 = 1 and bits 14–16 = 0b010, so it **passes the layout guard**; bits 0–5, 11 (RPY), 19 and 20 set. Baud word 1152 (115200), inhibit 10, **silent time 1** (as on our TM210, not the 0 the renatorgr firmware read), output rate 25 Hz.
+- **Target written (switches `0x001aa07f`, silent time 0, 800 Hz) to node ID 125:** acknowledged on the first try, and the read-back matched.
+- **Stream after the write:** CMD 41 (40-byte payload) and CMD 22 at 804/s each, a Status after every raw packet as on the TM210. Timestamp steps 1250 µs, with one 256 ms gap in 5 s (probably the switch-over), and no CRC errors. Status: 20 °C, internal rate 802 Hz, QoS 4.
+- **At rest:** accelerometer (−0.040, −0.214, −0.980) g, length 1.0035 g, so z negative like the TM210's (it reports gravity, if the unit lay right side up; its orientation on the desk wasn't checked); gyro bias near 0, noise about 0.004 rad/s. Magnetometer length 0.55 units, **about 178 updates/s against the TM210's 75 Hz**; the driver spots a new value by change, so the rate doesn't matter, but the 50 µT per unit scale hasn't been checked on the TM171.
+- **Left in RAM:** the request-ACK bit 17 stays set after the restore (`0x001aa83f`); it clears at the next power cycle.
+
 ## Target configuration
 Read-modify-write. Every field not listed is copied unchanged from the read-back.
 

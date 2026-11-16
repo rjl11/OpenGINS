@@ -140,6 +140,13 @@ Read 2026-11-13. None of these items changes the target configuration; they are 
 - **`UNLOG <port>`** with no message stops every log on that port (§8.4). `UNLOGALL` isn't in the manual, so our `UNLOG COMx` is the documented form.
 - **`RESET CONFIG`** (§8.2) clears the configuration except the serial ports, SIGNALGROUP, the log list and standby. Not used: provisioning starts from `FRESET`.
 - **`CONFIG RTK TIMEOUT`** (§4.44, Table 4-53): 0 disables RTK; 1–1800 s is the maximum age of corrections (600 s at most without standalone authorisation).
+- **RTK fix quality** (§4.44, Tables 4-54 and 4-55, UM980 and UM982; read 2026-11-16 for [Bench procedure: rejecting bad RTK fixes](#bench-procedure-rejecting-bad-rtk-fixes)):
+  - `CONFIG RTK RELIABILITY <rtk> <adr>`: each 1 low, 2 normal, 3 relatively high, 4 high. The manual gives 3 as the default for both, but the bench UM980 arrived with `3 1` set (the [as-received config](../docs/receiver-configs/um980-as-received-2026-11-12.md)) and the AiO set for a UM981 sends `3 1` too, so the ADR value is low on the bench unit whatever the factory default is. The manual doesn't say what the ADR threshold acts on (ADR is the carrier-phase measurement).
+  - `CONFIG RTK CN0THD 0|1`: 1 is a stringent C/N0 requirement for the RTK solution (default 0).
+  - `CONFIG RTK MMPL 0|1`: 1 is a stringent multipath mitigation threshold (default 0).
+  - `CONFIG RTK RESET` resets the RTK solution; a candidate for the firmware to send once it detects a wrong fix. `CONFIG RTK MPOS 1 66` appears in the example without a description.
+  - `MASK <deg>` (§5.2) is the elevation mask for tracking, so it also takes the low satellites out of the solution (default 5°). `MASK CN0` and `MASK RTCMCN0` only limit which observations go into the OBSV and RTCM output, not the solution, so they are no C/N0 mask for RTK; `CONFIG RTK CN0THD` is. `MASK` with no argument lists the current masks.
+  - `CONFIG PVT RELIABILITY` (above) is UM982 only and acts on the single-point solution, not on RTK.
 - **`RTCMSTATUSB ONCHANGED`** (msg ID 2125, §7.5.86, ONCHANGED only) reports each received RTCM message type with its count, the base ID and the satellite and signal counts: the receiver's own view of the corrections it decodes. A candidate for [rtcm-over-bluetooth.md](rtcm-over-bluetooth.md) diagnostics.
 - **More product types in `VERSION`** (§7.5.2, updated in R1.16): besides 17 = UM982 and 18 = UM980, for example 40 = UMD982, 64 = UM980C, 65 = UM982C and 94 = UM982A. Identify accepts only 17 and 18, so a module built on one of the variants is reported as "unsupported receiver". Decide when one turns up (open question).
 
@@ -320,6 +327,42 @@ Not done yet:
    - Whether each receiver outputs `PPSSTATUSB`, and what PPSSTATUS reports before the fix, at RTK fixed and in the 30 s after the antenna is disconnected. The UM980 outputs PPSSTATUSB and reads status 3 with a single fix (bench results 2026-11-13, UM980 PPSSTATUS); before the fix, the holdover, RTK fixed and the UM982 are still open. The UM980 also outputs SPOOFINFOB; indoors with ANTISPOOF off or on the spoofing flag and every mask stayed 0, with position type SINGLE (bench results 2026-11-13, UM980 SPOOFINFO). Anti-spoofing is out of scope for now, so the UM982 SPOOFINFOB check is not planned.
    - What Identify should do with a module built on a UM980C / UM982C / UM982A (VERSION types 64, 65, 94), if one turns up.
    - The 5 V current of each module at 20 Hz (the UM982 datasheet's 600 mW is for 10 Hz), and the module's COM1 and PPS logic level (3.3 V expected).
+   - Which receiver settings reject the bad RTK fixes seen indoors on 2026-11-16, and what they cost in fix rate: see the next section.
+
+## Bench procedure: rejecting bad RTK fixes
+Written 2026-11-16, not yet run.
+
+**Why:** in the overnight bench log of 2026-11-16 (`overnight_20261116.bin` on dietpi; the UM980 through `um980_bridge.py`, antenna indoors on purpose, RTCM from rtkbase) the receiver switched between RTK fixed and float every 5–20 min with 0.5–1.5 m jumps while it reported about 2 cm sd, and held a wrong fix about 8 m east and 8 m low for about 7 min. INSLIB followed it. The receiver should reject those fixes itself before the filter has to. Indoors is the hard case on purpose: multipath and weak signals are what make wrong fixes, and a setting that helps there is worth checking outdoors after.
+
+**Candidates** (manual facts in "More from the manual (R1.16)" above), one per run, from the bench unit's current state (`RTK RELIABILITY 3 1`, `CN0THD 0`, `MMPL 0`, elevation mask 5°):
+
+| Run | Setting sent | What it should change |
+|---|---|---|
+| A | none (baseline, a second night like 2026-11-16) | how much two nights of the same setup differ |
+| B | `CONFIG RTK RELIABILITY 4 1` | stricter ambiguity validation |
+| C | `CONFIG RTK MMPL 1` | multipath, likely the main cause indoors |
+| D | `CONFIG RTK CN0THD 1` | weak, reflected signals left out |
+| E | `MASK 15` | low satellites left out (indoors they are mostly reflections) |
+| F | `CONFIG RTK RELIABILITY 4 3` | the ADR threshold too, if B helps but not enough |
+| G | the helpful ones together | whether they add up, or the receiver never fixes |
+
+**Setup:** as on 2026-11-16, so runs compare: the same antenna in the same place, the UM980 on miniPi with `um980_tcp_relay.py`, the Pico on dietpi with `um980_bridge.py` and RTCM from rtkbase, the USB log recorded with `firmware/tools/field_log.py` on dietpi. Don't move the antenna between runs; if it moves, start again with run A.
+
+**Each run:**
+1. Stop the bridge (the relay takes one client). Connect to the relay port from a short script and send the setting, then `SAVECONFIG`; read `CONFIG` (and `MASK` for run E) to see it is listed. Undo the previous run's setting in the same go (send its old value), so only one differs from the baseline.
+2. Restart the bridge and reset the Pico. The boot report must say the configuration matches and nothing was written: the driver doesn't compare the RTK and MASK lines, so a match keeps them; a provisioning (FRESET) would wipe them, so then send the setting again.
+3. Record at least 8 h, overnight. The jumps came every 5–20 min and the wrong fix once a night, so a shorter run can't show a difference in wrong fixes. Note the start and end in UTC and that nothing else changed (rtkbase up, no gap in RTCM: `diff_age_s` in the GNSS CSV).
+4. Decode with `field_log.py decode` and count from `gnss.csv` (`pos_type` 48–50 are the fixed solutions L1_INT, WIDE_INT and NARROW_INT; 34 NARROW_FLOAT; 16 SINGLE; §7.5.21).
+
+**What to count per run:**
+- **Fix rate:** the share of epochs fixed, the number of fixed episodes and their median length, and the time to first fix after the reset.
+- **Reference position:** the median of the fixed epochs of run A, the same for every run. The antenna doesn't move, so a correct fix lands within a few cm of it; no surveyed point is needed.
+- **Wrong fixes:** a fixed episode whose median is more than 0.2 m horizontally or 0.3 m vertically from the reference. Count them, their length and their offset.
+- **Jumps:** the number of steps over 0.3 m between consecutive epochs, and at which change of `pos_type` each happens (fixed to float, float to fixed, or within a fixed episode).
+- **Honesty of the sd:** for fixed epochs and for float epochs, the share whose offset from the reference is under 3 × the reported sd (`sd_lat_m`, `sd_lon_m`, `sd_hgt_m`). Near 99 % means the sd can be fed to INSLIB as it is; far below means the firmware has to inflate it.
+- **Satellites:** the median `n_used` in fixed epochs (a stricter setting that leaves too few satellites shows here first).
+
+**Decision:** a setting goes into the target configuration (and into `um980_cfg.c` as an item sent at provisioning and checked on the fast path) when it removes most wrong fixes and big jumps without cutting the fixed share by more than half of what it was in run A; a setting that only lowers the fix rate stays out. Record each run as a "Bench results" section below with this table filled in, then check the kept settings outdoors with a clear sky, where the fix rate must stay near 100 %. Repeat on the UM982 (same commands; `CONFIG PVT RELIABILITY` for the single-point epochs there) once it is wired. The INSLIB side (whether it rejects such fixes, the sd fed to it on float, recovery after a run of rejections) is a separate question in the same `TODO.md` item.
 
 ## Bench results (2026-11-06, UM982 module on a PC over USB-C)
 The module was connected to a PC through its USB-C port (CH340 USB-serial bridge, Windows COM10). Only read-only queries and one-shot logs were sent, and nothing was saved. The antennas weren't connected or had no sky view: BESTNAV and UNIHEADING reported `INSUFFICIENT_OBS`, so heading, rate and fix tests are still open.

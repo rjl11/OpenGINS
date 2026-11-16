@@ -645,39 +645,39 @@ static void best_position(const nav_output_t *o, uint64_t now, best_pos_t *b)
         b->h_ell_m = s_last_nav.hgt_msl_m + (double)s_last_nav.undulation_m;
     }
 
-    /* Ground point: the filter's position is the IMU point, so its offset
-     * is the lever arm plus the antenna height; the receiver's is the
-     * antenna, so only the height. Along the body axes while the INS
-     * attitude is good enough (APP_GROUND_TILT_MAX_SD_DEG), else straight
-     * down, as for a levelled pole: the AHRS / ARS attitudes have no
-     * uncertainty to check, and a wrong yaw would throw a leaning pole's
-     * tip the wrong way. */
+    /* Ground point: the antenna height below the antenna (the filter's
+     * IMU point is first moved to the antenna by the lever arm). Along the
+     * body axes while the INS attitude is good enough
+     * (APP_GROUND_TILT_MAX_SD_DEG), else straight down, as for a levelled
+     * pole: the AHRS / ARS attitudes have no uncertainty to check, and a
+     * wrong yaw would throw a leaning pole's tip the wrong way. */
     float h_ant = settings_ant_height(&s_settings, settings_platform(&s_boot_settings));
     if (b->source[0] == 'n') return;
     bool ins = b->source[0] == 'i';
-    if (!(h_ant > 0.0f)) {
-        /* No ground point: lat/lon/h stay the output, and ant_* is the
-         * antenna ($PAOGI sends the antenna): the filter's IMU point moved
-         * by the lever arm, or the receiver's fix. */
-        double in[3] = { b->lat_deg / DEG, b->lon_deg / DEG, b->h_ell_m }, ant[3];
-        if (ins) {
-            double rpy[3] = { o->rpy_rad[0], o->rpy_rad[1], o->rpy_rad[2] };
-            ground_point(in, o->rpy_valid ? rpy : NULL, s_settings.leverarm_m, ant);
-            b->ant_lat_deg = ant[0] * DEG;
-            b->ant_lon_deg = ant[1] * DEG;
-            b->ant_h_ell_m = ant[2];
-        } else {
-            b->ant_lat_deg = b->lat_deg;
-            b->ant_lon_deg = b->lon_deg;
-            b->ant_h_ell_m = b->h_ell_m;
-        }
-        return;
+    double rpy[3] = { o->rpy_rad[0], o->rpy_rad[1], o->rpy_rad[2] };
+    double in[3] = { b->lat_deg / DEG, b->lon_deg / DEG, b->h_ell_m };
+
+    /* The antenna ($PAOGI sends it, with or without a ground point): the
+     * filter's IMU point moved by the lever arm, or the receiver's fix. The
+     * lever arm is turned with the filter's attitude whenever there is one;
+     * the tilt gate below is for the pole's tip, not for the lever arm,
+     * whose horizontal part would be lost straight down. */
+    if (ins) {
+        double ant[3];
+        ground_point(in, o->rpy_valid ? rpy : NULL, s_settings.leverarm_m, ant);
+        b->ant_lat_deg = ant[0] * DEG;
+        b->ant_lon_deg = ant[1] * DEG;
+        b->ant_h_ell_m = ant[2];
+    } else {
+        b->ant_lat_deg = b->lat_deg;
+        b->ant_lon_deg = b->lon_deg;
+        b->ant_h_ell_m = b->h_ell_m;
     }
+    if (!(h_ant > 0.0f)) return; /* no ground point: lat/lon/h stay the output */
     /* The pole axis in the body frame (pole_mount.h): the body down axis
      * unless a learned one is in use. */
     float u[3];
     pole_mount_axis(u);
-    double rpy[3] = { o->rpy_rad[0], o->rpy_rad[1], o->rpy_rad[2] };
     const double *att = NULL;
     b->axis_sd_deg = -1.0f;
     if (o->rpy_valid) {
@@ -690,31 +690,18 @@ static void best_position(const nav_output_t *o, uint64_t now, best_pos_t *b)
             if (b->axis_sd_deg <= APP_GROUND_TILT_MAX_SD_DEG) att = rpy;
         }
     }
-    /* Along the axis with an attitude; straight down without one: a
-     * levelled pole's axis is the true vertical, not the IMU's. */
+    /* From the antenna, along the axis with an attitude; straight down
+     * without one: a levelled pole's axis is the true vertical, not the
+     * IMU's. */
     float off[3] = { 0.0f, 0.0f, h_ant };
     if (att) {
         for (int i = 0; i < 3; i++) off[i] = h_ant * u[i];
     }
-    if (ins) {
-        for (int i = 0; i < 3; i++) off[i] += s_settings.leverarm_m[i];
-    }
-    double in[3] = { b->lat_deg / DEG, b->lon_deg / DEG, b->h_ell_m }, gp[3], ant[3];
-    ground_point(in, att, off, gp);
-    if (ins) {
-        /* The antenna from the IMU point, for the status. */
-        ground_point(in, att, s_settings.leverarm_m, ant);
-    } else {
-        ant[0] = in[0];
-        ant[1] = in[1];
-        ant[2] = in[2];
-    }
+    double ant[3] = { b->ant_lat_deg / DEG, b->ant_lon_deg / DEG, b->ant_h_ell_m }, gp[3];
+    ground_point(ant, att, off, gp);
     b->ground = true;
     b->ant_height_m = h_ant;
     b->tilted = att != NULL;
-    b->ant_lat_deg = ant[0] * DEG;
-    b->ant_lon_deg = ant[1] * DEG;
-    b->ant_h_ell_m = ant[2];
     b->lat_deg = gp[0] * DEG;
     b->lon_deg = gp[1] * DEG;
     b->h_ell_m = gp[2];
@@ -727,7 +714,6 @@ static void best_position(const nav_output_t *o, uint64_t now, best_pos_t *b)
 #define PAOGI_PERIOD_US    100000u
 #define PAOGI_FALLBACK_US  150000u  /* no publish for this long: the timer sends */
 #define PAOGI_DR_AFTER_US  1000000u /* INS with no fresh GNSS epoch: quality 6 */
-#define DAY_MS             86400000LL
 
 static bool     s_paogi_on;     /* tractor platform in effect since boot */
 static double   s_paogi_gyr[3]; /* corrected gyro summed since the last sentence */
@@ -763,83 +749,60 @@ static void paogi_send(const nav_output_t *o, uint64_t now)
     best_pos_t bp;
     best_position(o, now, &bp);
     bool ins = bp.source[0] == 'i';
-    bool gnss_fresh = s_have_nav && s_last_nav.pos_usable && age_us(now, s_last_nav.t_valid_us) < PAOGI_DR_AFTER_US;
 
-    paogi_fix_t f;
-    memset(&f, 0, sizeof f);
-    f.sats = -1;
-    f.hdop = -1.0f;
-    f.age_s = -1.0f;
+    /* The inputs; the field rules are in paogi_fill() (host-tested). */
+    paogi_in_t in;
+    memset(&in, 0, sizeof in);
+    in.have_pos = bp.source[0] != 'n';
+    in.pos_from_ins = ins;
+    in.ant_lat_deg = bp.ant_lat_deg;
+    in.ant_lon_deg = bp.ant_lon_deg;
+    in.ant_h_ell_m = bp.ant_h_ell_m;
+    in.have_undulation = s_have_undulation;
+    in.undulation_m = s_undulation_m;
 
-    /* UTC from the last epoch's GPS time, moved on to the filter output's
-     * time when that is the source. Integer milliseconds: a float time of
-     * week is too coarse late in the week. */
+    in.have_nav = s_have_nav;
     if (s_have_nav) {
-        int64_t ms = (int64_t)s_last_nav.tow_ms - (int64_t)s_last_nav.leap_s * 1000;
-        if (ins) ms += ((int64_t)o->t_us - (int64_t)s_last_nav.t_valid_us) / 1000;
-        f.time_valid = true;
-        f.utc_ms = (uint32_t)(((ms % DAY_MS) + DAY_MS) % DAY_MS);
-        f.sats = s_last_nav.n_used;
+        in.tow_ms = s_last_nav.tow_ms;
+        in.leap_s = s_last_nav.leap_s;
+        in.ins_dt_ms = ((int64_t)o->t_us - (int64_t)s_last_nav.t_valid_us) / 1000;
+        in.sats = s_last_nav.n_used;
+        in.rx_quality = gga_quality(s_last_nav.pos_type);
+        in.diff_age_s = s_last_nav.diff_age_s;
     }
+    in.gnss_fresh = s_have_nav && s_last_nav.pos_usable && age_us(now, s_last_nav.t_valid_us) < PAOGI_DR_AFTER_US;
     const um980_stats_t *gs = um980_stats(&s_gnss);
-    if (gs->dop_valid) f.hdop = gs->hdop;
-    if (gnss_fresh && s_last_nav.diff_age_s > 0.0f) f.age_s = s_last_nav.diff_age_s;
+    in.hdop_valid = gs->dop_valid;
+    in.hdop = gs->hdop;
 
-    /* The antenna, not the ground point: AgOpenGPS corrects for the
-     * antenna height itself. */
-    if (bp.source[0] != 'n') {
-        f.pos_valid = true;
-        f.lat_deg = bp.ant_lat_deg;
-        f.lon_deg = bp.ant_lon_deg;
-        f.alt_msl_m = bp.ant_h_ell_m - (s_have_undulation ? (double)s_undulation_m : 0.0);
-        if (!ins) {
-            f.quality = gga_quality(s_last_nav.pos_type);
-        } else {
-            f.quality = gnss_fresh ? gga_quality(s_last_nav.pos_type) : 6;
-        }
-    }
+    in.ins_vel_valid = o->vel_valid;
+    in.vel_n_mps = o->vel_ned[0];
+    in.vel_e_mps = o->vel_ned[1];
+    in.rx_speed_valid = s_have_nav && s_last_nav.vel_usable && age_us(now, s_last_nav.t_valid_us) < POS_GNSS_FRESH_US;
+    in.rx_speed_mps = (float)s_last_nav.hor_speed_mps;
 
-    if (ins && o->vel_valid) {
-        f.speed_valid = true;
-        f.speed_mps = hypotf(o->vel_ned[0], o->vel_ned[1]);
-    } else if (!ins && s_have_nav && s_last_nav.vel_usable && age_us(now, s_last_nav.t_valid_us) < POS_GNSS_FRESH_US) {
-        f.speed_valid = true;
-        f.speed_mps = (float)s_last_nav.hor_speed_mps;
-    }
-
-    /* Roll and pitch from the filter's best attitude source while it runs
-     * on a live IMU; the heading only from the INS while it navigates (a
-     * magnetometer yaw is no steering heading). */
     bool out_live = o->t_us != 0 && age_us(now, o->t_us) < POS_OUT_FRESH_US && o->imu_age_ms >= 0 &&
                     o->imu_age_ms < POS_IMU_FRESH_MS;
-    double roll = 0.0, pitch = 0.0;
-    if (out_live && o->rpy_valid) {
-        roll = o->rpy_rad[0];
-        pitch = o->rpy_rad[1];
-        f.att_valid = true;
-        f.roll_deg = (float)(roll * DEG);
-        f.pitch_deg = (float)(pitch * DEG);
-        if (ins && o->att_source == NAV_ATT_INS &&
-            (o->mode == NAV_SUITE_MODE_FULL || o->mode == NAV_SUITE_MODE_COASTING)) {
-            f.heading_valid = true;
-            f.heading_deg = (float)(o->rpy_rad[2] * DEG);
-        }
-    }
+    in.att_valid = out_live && o->rpy_valid;
+    in.roll_rad = o->rpy_rad[0];
+    in.pitch_rad = o->rpy_rad[1];
+    in.yaw_rad = o->rpy_rad[2];
+    in.heading_ok = o->att_source == NAV_ATT_INS &&
+                    (o->mode == NAV_SUITE_MODE_FULL || o->mode == NAV_SUITE_MODE_COASTING);
+    in.yaw_sd_deg = o->rpy_sd_valid ? (float)(o->rpy_sd_rad[2] * DEG) : -1.0f;
+    in.heading_max_sd_deg = APP_PAOGI_HEADING_MAX_SD_DEG;
 
-    /* Yaw rate: the mean corrected gyro since the last sentence, less the
-     * filter's bias, turned into the rate of the NED yaw (clockwise). */
-    if (s_paogi_gyr_n > 0) {
-        double q = s_paogi_gyr[1] / s_paogi_gyr_n, r = s_paogi_gyr[2] / s_paogi_gyr_n;
-        if (o->bias_valid) {
-            q -= o->gyr_bias[1];
-            r -= o->gyr_bias[2];
-        }
-        double cp = cos(pitch);
-        if (fabs(cp) > 0.1) f.yaw_rate_dps = (float)((q * sin(roll) + r * cos(roll)) / cp * DEG);
+    in.gyr_n = s_paogi_gyr_n;
+    for (int i = 0; i < 3; i++) {
+        in.gyr_sum[i] = s_paogi_gyr[i];
+        in.gyr_bias[i] = o->gyr_bias[i];
     }
+    in.bias_valid = o->bias_valid;
     s_paogi_gyr[0] = s_paogi_gyr[1] = s_paogi_gyr[2] = 0.0;
     s_paogi_gyr_n = 0;
 
+    paogi_fix_t f;
+    paogi_fill(&in, &f);
     char line[PAOGI_MAX];
     if (paogi_format(&f, line, sizeof line) > 0) printf("%s", line);
 }
@@ -871,7 +834,13 @@ static bool paogi_poll(uint64_t now)
     }
     if (!due) return false;
     s_next_us = now + PAOGI_PERIOD_US;
-    if (usb_log_on() || !paogi_enabled()) return false;
+    if (usb_log_on() || !paogi_enabled()) {
+        /* Held: drop the gyro sums, or the first sentence after the hold
+         * would carry the mean yaw rate of the whole hold. */
+        s_paogi_gyr[0] = s_paogi_gyr[1] = s_paogi_gyr[2] = 0.0;
+        s_paogi_gyr_n = 0;
+        return false;
+    }
     nav_output_t o;
     nav_get_output(&o);
     paogi_send(&o, now);
@@ -1045,6 +1014,10 @@ static void print_status(uint64_t now, uint32_t baro_hz)
             printf("      roll %7.2f  pitch %7.2f  yaw %7.2f deg%s\n", (double)o.rpy_rad[0] * DEG,
                    (double)o.rpy_rad[1] * DEG, (double)o.rpy_rad[2] * DEG,
                    o.zaru_active ? "  (standing still)" : "");
+            if (o.rpy_sd_valid) {
+                printf("      1-sigma roll %.2f  pitch %.2f  yaw %.2f deg\n", (double)o.rpy_sd_rad[0] * DEG,
+                       (double)o.rpy_sd_rad[1] * DEG, (double)o.rpy_sd_rad[2] * DEG);
+            }
         }
         printf("      attitude from %s\n", att_source_name(o.att_source));
         printf("MAG   AHRS %-3s  samples %3lu Hz  |B| %.1f uT  ", o.ahrs_valid ? "run" : "off",
@@ -1343,6 +1316,11 @@ static void publish_status_json(uint64_t now, uint32_t baro_hz)
             float rpy[3] = { (float)(o.rpy_rad[0] * DEG), (float)(o.rpy_rad[1] * DEG),
                              (float)(o.rpy_rad[2] * DEG) };
             jw_vec3(&w, "rpy_deg", rpy, 2);
+            if (o.rpy_sd_valid) {
+                float sd[3] = { (float)(o.rpy_sd_rad[0] * DEG), (float)(o.rpy_sd_rad[1] * DEG),
+                                (float)(o.rpy_sd_rad[2] * DEG) };
+                jw_vec3(&w, "rpy_sd_deg", sd, 2);
+            }
             jw_bool(&w, "standing_still", o.zaru_active);
         }
         if (o.pos_valid) {
@@ -1925,7 +1903,8 @@ int main(void)
     /* The platform in effect since boot, as for the other platform choices. */
     s_paogi_on = settings_platform(&s_boot_settings) == APP_PLATFORM_TRACTOR;
     if (s_paogi_on) {
-        printf("$PAOGI on USB at 10 Hz (USB command 'paogi off' stops it)\n");
+        /* Not at the line start: readers take lines starting with $ as NMEA. */
+        printf("[paogi] sent on USB at 10 Hz (USB command 'paogi off' stops it)\n");
     }
 
     const um980_config_t gnss_cfg = {

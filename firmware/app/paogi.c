@@ -4,11 +4,84 @@
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 
 static bool s_enabled = true;
 
 void paogi_set_enabled(bool on) { s_enabled = on; }
 bool paogi_enabled(void) { return s_enabled; }
+
+#define DEG    57.29577951308232
+#define DAY_MS 86400000LL
+
+void paogi_fill(const paogi_in_t *in, paogi_fix_t *f)
+{
+    memset(f, 0, sizeof *f);
+    f->sats = -1;
+    f->hdop = -1.0f;
+    f->age_s = -1.0f;
+
+    /* UTC from the last epoch's GPS time, moved on to the filter output's
+     * time when that is the source. Integer milliseconds: a float time of
+     * week is too coarse late in the week. */
+    if (in->have_nav) {
+        int64_t ms = (int64_t)in->tow_ms - (int64_t)in->leap_s * 1000;
+        if (in->pos_from_ins) ms += in->ins_dt_ms;
+        f->time_valid = true;
+        f->utc_ms = (uint32_t)(((ms % DAY_MS) + DAY_MS) % DAY_MS);
+        f->sats = in->sats;
+    }
+    if (in->hdop_valid) f->hdop = in->hdop;
+    if (in->gnss_fresh && in->diff_age_s > 0.0f) f->age_s = in->diff_age_s;
+
+    /* The antenna, not the ground point: AgOpenGPS corrects for the
+     * antenna height itself. */
+    if (in->have_pos) {
+        f->pos_valid = true;
+        f->lat_deg = in->ant_lat_deg;
+        f->lon_deg = in->ant_lon_deg;
+        f->alt_msl_m = in->ant_h_ell_m - (in->have_undulation ? (double)in->undulation_m : 0.0);
+        f->quality = (!in->pos_from_ins || in->gnss_fresh) ? in->rx_quality : 6;
+    }
+
+    if (in->pos_from_ins && in->ins_vel_valid) {
+        f->speed_valid = true;
+        f->speed_mps = hypotf(in->vel_n_mps, in->vel_e_mps);
+    } else if (!in->pos_from_ins && in->rx_speed_valid) {
+        f->speed_valid = true;
+        f->speed_mps = in->rx_speed_mps;
+    }
+
+    /* Roll and pitch from the filter's best attitude source; the heading
+     * only from the INS while it navigates (a magnetometer yaw is no
+     * steering heading), and only once its yaw is known well enough: with
+     * a single antenna the yaw is not observable before the vehicle moves. */
+    double roll = 0.0, pitch = 0.0;
+    if (in->att_valid) {
+        roll = in->roll_rad;
+        pitch = in->pitch_rad;
+        f->att_valid = true;
+        f->roll_deg = (float)(roll * DEG);
+        f->pitch_deg = (float)(pitch * DEG);
+        if (in->pos_from_ins && in->heading_ok && in->yaw_sd_deg >= 0.0f &&
+            in->yaw_sd_deg <= in->heading_max_sd_deg) {
+            f->heading_valid = true;
+            f->heading_deg = (float)(in->yaw_rad * DEG);
+        }
+    }
+
+    /* Yaw rate: the mean gyro less the filter's bias, turned into the rate
+     * of the ZYX yaw (clockwise, NED): (q sin(roll) + r cos(roll)) / cos(pitch). */
+    if (in->gyr_n > 0) {
+        double q = in->gyr_sum[1] / in->gyr_n, r = in->gyr_sum[2] / in->gyr_n;
+        if (in->bias_valid) {
+            q -= in->gyr_bias[1];
+            r -= in->gyr_bias[2];
+        }
+        double cp = cos(pitch);
+        if (fabs(cp) > 0.1) f->yaw_rate_dps = (float)((q * sin(roll) + r * cos(roll)) / cp * DEG);
+    }
+}
 
 typedef struct {
     char  *b;

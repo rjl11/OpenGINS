@@ -235,6 +235,15 @@
  * section 3.2); at 2 m it is about 7 cm of tip error, 1-sigma. */
 #define APP_GROUND_TILT_MAX_SD_DEG  2.0f
 
+/* $PAOGI (app/paogi.h) sends the INS heading only while the INS's own yaw
+ * 1-sigma is at most this [deg]; the field stays empty otherwise, and
+ * AgOpenGPS falls back to its fix-to-fix heading. AgOpenGPS takes a $PAOGI
+ * heading as a dual-antenna heading with no fusion of its own, and with a
+ * single antenna the yaw is not observable until the vehicle has driven
+ * (bench 2026-11-16: it drifted 4 deg in a minute standing still in FULL).
+ * 1 deg is about 5 cm of offset 3 m ahead; an estimate, not yet measured. */
+#define APP_PAOGI_HEADING_MAX_SD_DEG 1.0f
+
 /* Survey-pole aiding (app/pole_aid.h, plans/pole-tilt-aiding.md): on the
  * pole platform with an antenna height, from the natural sway of a pole
  * standing on a point. All estimates, not yet measured; the other
