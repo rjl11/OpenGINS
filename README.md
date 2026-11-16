@@ -1,6 +1,8 @@
-# gnss_smart
+# OpenGINS
 
-GNSS and IMU fusion firmware for a navigation unit meant to be universal: an agricultural unit for a tractor (AgOpenGPS / AgOpenWeb), a GNSS survey pole, and a UAV. The design is one board and one filter for all three; the platform setting picks how the sensors are used.
+**Open GNSS and Inertial Navigation System.**
+
+OpenGINS is GNSS and IMU fusion firmware for a navigation unit meant to be universal: an agricultural unit for a tractor (AgOpenGPS / AgOpenWeb), a GNSS survey pole, and a UAV. The design is one board and one filter for all three; the platform setting picks how the sensors are used.
 
 The unit combines a Unicore UM980 / UM982 GNSS receiver, a TM210 IMU, a BMP581 barometer and optional wheel or optical-flow speed in the [INSLIB](https://github.com/jnz/INSLIB) `nav_suite` filter. It runs on a Raspberry Pi Pico 2 W (RP2350) in bare metal. The filter runs on core 1; core 0 handles the sensor UARTs, Bluetooth and the Wi-Fi configuration page.
 

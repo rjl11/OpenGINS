@@ -22,7 +22,7 @@ On Windows, Raspberry Pi's Pico SDK installer or the VS Code Pico extension give
 ## Get the code
 
 ```bash
-git clone <this repository>
+git clone https://github.com/rjl11/OpenGINS.git
 cd OpenGINS
 git submodule update --init --recursive
 ```
