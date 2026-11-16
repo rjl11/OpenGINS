@@ -1,0 +1,107 @@
+# Optical-flow velocity aiding from a camera on a Raspberry Pi
+
+## Context
+A downward-looking camera with an optical-flow algorithm measures how fast the ground moves under the unit. Can that velocity be fused in INSLIB, so the filter keeps a good velocity (and with it position and attitude) through GNSS outages? The flow would run on a Raspberry Pi, which sends results to the Pico 2 W. This plan covers what INSLIB offers today, how the flow should be split between the Pi and the Pico, the timing, the link, the camera, and what it means on each platform (tractor, survey pole, UAV).
+
+**Camera bought (2026-11-15): INNO-MAKER CAM-MIPI9281RAW-V2** (OV9281). Its vendor repo is the submodule `external/CAM-OV9281RAW-V2`; the user manual is `external/CAM-OV9281RAW-V2/CAM-OV9281RAW V2 User Manual V1.4.pdf` (cited below as "the manual"), the trigger tools are in `ov9281_libcamera/`. Every performance figure in this plan is an estimate, not yet measured.
+
+Related: [inslib-nav-suite.md](inslib-nav-suite.md) (how epochs are built), [rp2350-feasibility.md](rp2350-feasibility.md) (ports, PIO UARTs), [pico2-zero2w-usb-companion.md](pico2-zero2w-usb-companion.md) (a Zero 2 W on USB, which could also run the flow), [imu-auto-calibration.md](imu-auto-calibration.md) (the per-platform settings), [wheel-odometry-aiding.md](wheel-odometry-aiding.md) (wheel and radar speed on a tractor, the fallback when dust or darkness blinds the camera; it would share the body-velocity input below).
+
+## What INSLIB has today
+`external/INSLIB/src/ins.h`, `ins_measurements_t`:
+- **No body-frame velocity or optical-flow input.**
+- `gnss_vel`: NED velocity with covariance. Not for flow: it is the GNSS slot, and a flow velocity turned into NED with the filter's own attitude would correlate with the attitude error.
+- `speed` (REQ-NAV-068): scalar ground speed, `h(x) = ||v_n||`, with `speed_delay_ms` / `speed_delay_us` anchored in the history. Usable for flow today (step 1 below), but it drops the direction, and with it the sideways slip.
+- Non-holonomic lateral constraint (REQ-NAV-077, `ins_fuse_lateral_constraint()` in `src/ins.c`): already fuses the body-frame lateral velocity `(R_b_to_n · v_n)_y` against zero, with the measurement rows on velocity and attitude. A body-velocity measurement is the same thing with a measured value on all three axes, so this function is the template.
+
+## Split of work
+- **Pi (Linux, camera):** captures frames and computes the median displacement between two frames in normalised image coordinates (pixel shift ÷ focal length in pixels, after undistortion; radians near the centre) on the camera's x and y axes, its 1-sigma, the number of tracked features and a frame counter. It does **not** divide by time, remove rotation or scale by height: the Pico has the exact exposure times (strobe), the gyro and the height. Over flat ground a translation gives the same normalised shift everywhere in the image (v·dt/h), which is why it is not converted to ray angles.
+- **Pico, core 0 (flow module):** receives and checks the messages and matches each frame number to its trigger timestamp (below). It then:
+  - removes the rotation part: flow = −(v_xy / h) − ω_xy, with ω the gyro rate averaged over the same frame interval (the signs depend on the camera axes, so check them on the bench). The 800 Hz TM210 samples are on core 0 anyway;
+  - multiplies by height above ground h to get the camera-frame velocity, rotates it into the body frame with the mounting rotation, and sets the covariance from the quality figure and the height error;
+  - queues it to core 1 like the other measurements.
+- **Core 1:** puts it in the next epoch. Nothing new runs on core 1 apart from the fusion itself.
+
+Doing the de-rotation and scaling on the Pico keeps the IMU, the timing and the mounting in one place, and the Pi stays a plain image-processing box that can be swapped out.
+
+## Timing
+- **The Pico triggers each exposure.** A GPIO drives the camera's external-trigger input, and the Pico takes `time_us_64()` when it raises the edge (as with PPS and the IMU, the timestamp is taken where the event happens, not when the result arrives).
+- **The camera's strobe output tells when it really exposed.** The CAM-MIPI9281RAW-V2 has an optocoupled strobe output (J2, below). Timestamping its edge on a Pico GPIO interrupt removes the optocoupler and sensor delays from the trigger time, and shows every exposure that actually happened, so a missed trigger is seen as a missing strobe. Use the strobe time when it is there; the trigger time is the fallback.
+- The time of validity of a flow value is the midpoint between the two exposures it compares.
+- **Matching Pi frames to Pico exposures:** the Pico leaves out one trigger pulse every 256 (`FLOW_LINK_GAP_PERIOD`). The Pi sees the doubled interval in its sensor timestamps and flags the first frame after it (`FLOW_F_AFTER_GAP`); the Pico knows which of its strobes followed its own gap and counts from there. A frame lost on the Pi shows as a longer interval (`FLOW_F_DROPPED`), and the Pico stops using flow until the next gap. The Pi's frame counter is in every message. The Pico matches each message to its own strobe or trigger times, so Linux and link latency never enter the measurement; they only make it older, and the age goes to INSLIB as the measurement delay.
+- Rate: 100 Hz trigger by default. The flow takes 1.9 ms per frame at 320×200 in C++ on dietpi (RK3399, one thread, synthetic frames, measured 2026-11-15), so up to the sensor's 309 fps is within reach there; on the Pi in use it is not measured yet (`pi/flow/README.md`, "Speed"). The fusion can run slower: like the lateral constraint, the error is a slowly changing offset (height, scale), not white noise, so a fast fusion rate only makes the filter overconfident.
+
+## Link (Pi → Pico)
+- Both hardware UARTs are taken (TM210, UM98x COM1). Use a **PIO UART**, receive only, plus one trigger output, on free pins. GP8–GP15 and GP26–GP28 are free; GP16–21 stay reserved for the W5500 and GP22 is the web switch. Suggested: GP8 Pi TX → Pico RX, GP10 trigger out, GP11 strobe in. Like every pin, they go in `firmware/app/board_pins.h`.
+- Messages are small: a `FLOW_MSG_FLOW` frame is 35 bytes (28-byte payload, sync, version, type, length, CRC-16), so 3.5 kB/s at 100 Hz, about a third of 115200 baud. The format is in `common/flow_link.h` (see "Code").
+- If the Pi is the Zero 2 W companion from [pico2-zero2w-usb-companion.md](pico2-zero2w-usb-companion.md), send the messages on its USB link instead of a UART. The trigger wire is still needed for timing.
+- Pi load: Lucas-Kanade or block matching on a 160×120 to 320×240 crop at 100 Hz fits a Zero 2 W (estimate, not yet measured); a Pi 4/5 has room for more.
+
+## Height above ground, per platform
+| Platform | Height | Use |
+|---|---|---|
+| Tractor | Fixed mounting height (setting), corrected for roll/pitch. Crop height and wheel sinkage change it | Good: measures sideways slip as well, which wheel odometry can't. Scale error from the height is a few percent (estimate), so it suits outages, not replacing RTK |
+| UAV (multirotor) | Rangefinder (small lidar, e.g. TFmini or VL53L1X class) on the Pi or the Pico | The usual use of flow; needs texture and light under the craft. Over water or snow it fails |
+| Fixed wing | Too high and fast for a downward flow camera | Off |
+| Survey pole | Handheld near the ground, height and tilt change all the time | Off |
+
+The platform setting from [imu-auto-calibration.md](imu-auto-calibration.md) decides the default.
+
+## INSLIB integration, in two steps
+1. **No INSLIB change: fuse the speed.** Put the magnitude of the horizontal body velocity in `m.speed` with `speed_delay_ms/us`. It works with the current library, but it carries no direction or sideways information, and `h = ||v_n||` is weak at low speed.
+2. **Body-velocity input in INSLIB** (a change inside `external/INSLIB`, with its own REQ-NAV id, requirement text in `requirements/req_ins.md` and tests):
+   - `ins_meas_body_vel_t { float vel_b[3]; float Qll_b[9]; bool is_valid; }`, plus `body_vel_leverarm_b[3]` and `body_vel_delay_ms/us` in `ins_measurements_t`. An axis can be left out by a zero or negative variance, so a 2D flow (x/y) and a 3D one share the type.
+   - `h(x) = R_n_to_b · v_n + ω_b × lever`, residuals in the body frame. The velocity and attitude rows are the ones `ins_fuse_lateral_constraint()` already builds, on all three axes instead of one; the delay is handled as `ins_fuse_speed()` handles it.
+   - Gate the outliers like the other inputs, with the same "new sample only" contract as the barometer.
+   - `nav_suite` passes it through to `ins` only.
+   - Wheel odometry uses the same input: `[v_axle, 0, ·]` with the lever arm at the rear-axle centre, which also places the non-holonomic constraint correctly in turns ([wheel-odometry-aiding.md](wheel-odometry-aiding.md)).
+
+## Camera
+**One camera: monochrome, global shutter, external trigger, no IR-cut filter.**
+- **Global shutter:** a rolling shutter reads rows at different times, so vibration and turns bend the image and bias the flow. External trigger inputs are also mostly found on global-shutter modules.
+- **Monochrome:** no Bayer filter, so more light per pixel and full resolution. Flow uses only brightness.
+- **No IR-cut filter:** more light at dusk, and an 850 nm illuminator makes night work possible (tractor). An IR-cut filter only matters for colour images, which flow doesn't need. Don't buy one of each.
+- **First choice (bought):** an OV9281 module (1 MP mono, 1280×800, trigger input), here the INNO-MAKER CAM-MIPI9281RAW-V2 below. It is common in visual-inertial rigs and on the Pi's CSI port.
+- **Second choice:** an IMX296 mono module (1.6 MP, the sensor of the Raspberry Pi Global Shutter Camera; that camera has an XTR trigger pad).
+- **Lens:** about 60–90° field of view, focused at the mounting distance. A short exposure (fast lens, or the illuminator) avoids motion blur at speed.
+
+### The bought module: INNO-MAKER CAM-MIPI9281RAW-V2
+From the manual:
+- **Sensor:** OV9281, mono, global shutter, 1280×800, 3 µm pixels, 1/4", 2-lane MIPI CSI-2, RAW8/RAW10.
+- **Pi support:** Raspberry Pi OS's own `ov9281` driver, `dtoverlay=ov9281,cam0` or `cam1`, used through libcamera / rpicam-apps. INNO-MAKER's own driver (more modes) is kept in `Legacy/`, but the vendor recommends the built-in one. The connector is the 15-pin Pi camera pinout; a Zero 2 W or Pi 5 needs the 22-pin adapter cable. The manual shows a Pi 4 and Pi 5 only; whether the Zero 2 W's ISP keeps up at these rates is not checked.
+- **Modes with the built-in driver (full field of view; the smaller ones are scaled down):**
+
+  | Size | RAW8 | RAW10 |
+  |---|---|---|
+  | 640×400 | 309.79 fps | 247.83 fps |
+  | 1280×720 | 171.79 fps | 137.43 fps |
+  | 1280×800 | 143.66 fps | 114.93 fps |
+
+  640×400 RAW8 is the flow mode: least data, highest rate.
+- **Lens:** M12 mount, 2.8 mm, f/2.2, 148° diagonal / 118° horizontal, distortion under −17 %, focus adjustable. That is very wide for flow: the distortion must be corrected (calibrate the intrinsics once, e.g. with OpenCV's fisheye model) or only the centre of the image used. A narrower M12 lens (about 6–8 mm, 40–60°) is a cheap swap and gives more pixels per cm of ground. Focal length in pixels at 640×400: about 2.8 mm / 6 µm ≈ 470 px (estimate, binned 3 µm pixels). At the default processing size of 320×200 it is about 233 px. With up to about 12 px of shift per frame at 100 fps, that allows about 5 m/s at 1 m height (estimate); a narrower lens trades field of view for resolution, not for speed.
+- **IR filter:** the manual does not say whether the lens has an IR-cut coating, only that the module "works reliably in low-light or near-infrared". Check it on the bench with an 850 nm LED; if there is one, swap the M12 lens.
+- **External trigger, J3 (TRIG+ / TRIG−):** 3.3–5 V input into a PS2901-1 optocoupler with 200 Ω on board. From a Pico 3.3 V GPIO that is about (3.3 − 1.2) / 200 ≈ 10 mA, more than the RP2350's default 4 mA drive; set the pin to 12 mA drive strength, or better switch it with a small transistor or MOSFET from 3.3 V. Trigger mode is turned on over the sensor's I2C with the vendor's `ov9281_trigger <i2c bus> 1` (a binary in `ov9281_libcamera/`), and libcamera needs its timeout raised (`timeout.yaml`, `libcamera-timeout.sh`) so it waits for triggered frames. The vendor's test script `trig_sig_pin_23.sh` triggers from the Pi's own header pin 23; this project triggers from the Pico instead.
+- **Strobe output, J2 (STROBE+ / STROBE−):** open collector from an optocoupler (the manual names both PS2901-1 and TLP281), max 50 mA. Wire STROBE+ to a Pico GPIO with a pull-up to 3.3 V and STROBE− to GND; the line goes low during the strobe. How the strobe is enabled and how long it lasts is set in sensor registers, which the manual does not describe, so check it on the bench (an LED on the strobe, or a logic analyser).
+- Board 32×32 mm, 4 g.
+
+**Without a Pi:** a dedicated flow sensor (PAA3905 or PMW3901 class, SPI) on the Pico's SPI1, or a UART module with flow and a lidar (MTF-01 class) on a PIO UART. They give flow directly at low cost and no Linux, but less control over the image, and the PMW3901 class is meant for short range.
+
+## Code
+- `common/flow_link.h`: the link frame and the `FLOW_MSG_FLOW` message, with the C decoder the Pico will use. Host test `firmware/tools/test_flow_link.c`.
+- `pi/flow/`: the Pi program in C++ (CMake, OpenCV and libcamera from the OS packages): `src/main.cpp` loop, `src/camera.cpp` (libcamera), `src/flow_lk.cpp` (Lucas-Kanade that keeps its features between frames, median outlier test, undistortion, median and 1-sigma), `src/interval_watch.hpp` (gap and drop flags), `src/serial.cpp`; tests in `tests/test_flow.cpp`. `pi/flow/python/` is the first version in Python (Picamera2), kept as the reference. Setup, calibration and speed figures in `pi/flow/README.md`.
+- `firmware/drivers/flow_io` (built 2026-11-15): the Pico's hardware side. The trigger is a PWM pulse train on GP10 (100 Hz, `APP_FLOW_TRIGGER_HZ`, 100 µs, 12 mA drive) with one pulse left out every `FLOW_LINK_GAP_PERIOD`; each pulse's edge time is computed from the PWM counter in the wrap interrupt, and on the bench the pulses came 10.000 ms apart. Strobe edges on GP11 are timestamped in a GPIO interrupt. The link is a receive-only PIO UART on GP8 into a DMA ring, with the frame parser and CRC check. All of it goes into the USB log (`firmware/app/usb_log.h`, see [wheel-odometry-aiding.md](wheel-odometry-aiding.md), "Field testing"), so flow is recorded on the field tests whenever the camera rig is fitted. The trigger and strobe were bench-tested (strobe pin driven over SWD); the link has not yet received from a real Pi.
+- `firmware/app/flow_nav.c` (built 2026-11-15, core 0, no SDK calls): matches each message to its exposures (anchored on the frame after the left-out pulse, counted on by `frame_seq`, broken by `FLOW_F_DROPPED`), times each exposure by the middle of its strobe pulse or else the trigger edge plus `APP_FLOW_EXPOSURE_DELAY_US` plus half the exposure, integrates the gyro over exactly the interval between the two exposures, removes the rotation (`vx = -Z (dx + dth_y) / dt`, `vy = -Z (dy - dth_x) / dt` in camera axes, Z the tilt-corrected height), rotates into body axes (`APP_FLOW_CAM_YAW_DEG`), moves the velocity to the IMU point with the lever arm, and averages 10 frames into one 10 Hz speed sample whose 1-sigma has the frame noise (averaged down) and the height error (`APP_FLOW_HEIGHT_REL_SD`, not averaged). `firmware/app/field_io.c` feeds it and pushes each sample with `nav_push_speed()`; core 1 attaches it to the next IMU epoch as `m.speed` with its delay (`nav_core1.c`, `attach_speed()`, a queue shared with wheel speed later). Status: a `speed` line under `FLOW` with the speed, the body vector, the reject counts and INSLIB's given / used / skipped / late counts, the same in `/status.json` under `flow`. The geometry (camera height, image-top direction, lever arm from the IMU) is on the web config page since 2026-11-15, saved in the settings record and applied live (the `FLOW` status line and `/status.json` show the values in use); `APP_FLOW_*` in `app_config.h` are the defaults. The rest (the height error, the averaging period, the gates) stays compile-time. The "optical flow" switch under "Sensors fitted" on the same page (settings version 3, 2026-11-15) turns the whole input off: no trigger pulses (the pin is held low), no strobe interrupt, nothing to INSLIB; it replaced the compile-time `APP_FLOW_FUSE`.
+- Host test `firmware/tools/test_flow_nav.c`: the camera is simulated over flat ground (the flow is the projection of a ground point into both frames, so the rotation signs are checked against geometry), with forward and sideways motion, roll and pitch rates while standing (0.000 m/s, a wrong sign would read 0.4), a yaw rate with the camera 1 m ahead, the camera turned 90°, a held 0.3 rad roll, 2 m height, trigger-only timing, a frame lost on the Pi, and an untriggered camera. The signs still need the bench check with the real camera (its axes against the model's).
+
+## Steps
+1. Camera bought (CAM-MIPI9281RAW-V2). Pick the Pi (Pi 4/5 first, then try the Zero 2 W), and decide on the lens (keep the 2.8 mm with undistortion, or a narrower M12).
+2. Pi alone: `dtoverlay=ov9281`, `rpicam-hello --list-cameras` shows the modes above, 640×400 RAW8 at 300 fps, then trigger mode with the Pi's own pin (vendor script). Check the IR filter and the strobe output.
+3. Bench with the Pico: trigger from GP10, strobe into GP11, flow on the Pi; log flow, trigger and strobe times and IMU together, and check the frame-number match, the strobe-to-trigger delay and the de-rotation on a turntable or by hand.
+4. Step 1 (speed through `m.speed`) on the tractor, with GNSS cut in a replay (`external/INSLIB/tools/replay.c`) for 10 s and 30 s.
+5. Step 2 (body-velocity input in INSLIB), then the same replay.
+
+## Verification
+- De-rotation: rotate the unit in place over a textured floor; the velocity after de-rotation stays near zero.
+- Scale: drive a measured straight line with RTK; flow distance against RTK distance.
+- Timing: the delay that gives the smallest residual against the GNSS velocity should be the computed age, within a frame.
+- Filter: position and velocity error growth in GNSS-cut replays with and without flow.

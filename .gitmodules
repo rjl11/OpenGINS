@@ -1,0 +1,12 @@
+[submodule "external/INSLIB"]
+	path = external/INSLIB
+	url = https://github.com/jnz/INSLIB.git
+[submodule "external/BMP5_SensorAPI"]
+	path = external/BMP5_SensorAPI
+	url = https://github.com/boschsensortec/BMP5_SensorAPI
+[submodule "external/Adafruit_BMP5xx"]
+	path = external/Adafruit_BMP5xx
+	url = https://github.com/adafruit/Adafruit_BMP5xx
+[submodule "external/CAM-OV9281RAW-V2"]
+	path = external/CAM-OV9281RAW-V2
+	url = https://github.com/INNO-MAKER/CAM-OV9281RAW-V2

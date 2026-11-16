@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#111316">
+<title>gnss_smart</title>
+<style>
+:root{--bg:#f2f3f5;--card:#fff;--fg:#15181c;--dim:#646b75;--line:#dfe2e6;
+--ok:#15803d;--okb:#dcfce7;--warn:#a16207;--warnb:#fef3c7;--bad:#b91c1c;--badb:#fee2e2;--off:#6b7280;--offb:#eceef1}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1013;--card:#1a1d22;--fg:#eceef1;--dim:#9aa1ab;--line:#2a2e35;
+--ok:#4ade80;--okb:#12301d;--warn:#fbbf24;--warnb:#3a2d0a;--bad:#f87171;--badb:#3b1414;--off:#8b929c;--offb:#24272d}}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;padding:12px 16px 24px;background:var(--bg);color:var(--fg);font:16px/1.35 system-ui,sans-serif}
+.num{font-variant-numeric:tabular-nums}
+header{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+header h1{font-size:18px;margin:0;flex:1}
+header .up{color:var(--dim);font-size:14px}
+.pill{font-weight:700;font-size:14px;padding:4px 10px;border-radius:999px}
+.card{background:var(--card);border:1px solid var(--line);border-left-width:8px;border-radius:12px;padding:12px 14px;margin-bottom:12px}
+.lbl{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim)}
+.big{font-size:40px;font-weight:800;line-height:1.1;margin:2px 0 6px;overflow-wrap:anywhere}
+.row{display:flex;flex-wrap:wrap;gap:4px 18px;font-size:17px}
+.row i{font-style:normal;color:var(--dim);white-space:nowrap}
+.row b{font-weight:700;color:var(--fg)}
+.banner{margin-top:8px;padding:8px 10px;border-radius:8px;font-weight:700;background:var(--bad);color:var(--card)}
+.ok{border-left-color:var(--ok)}.ok .big,.ok .st{color:var(--ok)}
+.warn{border-left-color:var(--warn)}.warn .big,.warn .st{color:var(--warn)}
+.bad{border-left-color:var(--bad)}.bad .big,.bad .st{color:var(--bad)}
+.off{border-left-color:var(--off)}.off .big,.off .st{color:var(--off)}
+.pill.ok{background:var(--okb);color:var(--ok)}.pill.bad{background:var(--badb);color:var(--bad)}
+.pos{font-size:20px;font-weight:700;cursor:pointer}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+.chip{background:var(--card);border:1px solid var(--line);border-left-width:8px;border-radius:12px;padding:10px 12px;min-width:0}
+.chip .n{font-size:14px;color:var(--dim)}
+.chip .st{font-size:21px;font-weight:800;margin:1px 0}
+.chip .d{font-size:14px;color:var(--dim);overflow-wrap:anywhere}
+.ok.chip{background:var(--okb);border-left-color:var(--ok)}.warn.chip{background:var(--warnb);border-left-color:var(--warn)}
+.bad.chip{background:var(--badb);border-left-color:var(--bad)}.off.chip{background:var(--offb);border-left-color:var(--off)}
+.stale .card,.stale .chip{opacity:.45;filter:grayscale(1)}
+footer{color:var(--dim);font-size:14px;text-align:center}
+nav{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+nav a{display:flex;align-items:center;justify-content:center;min-height:48px;border-radius:10px;background:var(--card);border:1px solid var(--line);color:var(--fg);text-decoration:none;font-weight:600}
+</style>
+</head>
+<body>
+<header><h1>gnss_smart</h1><span class="up num" id="up"></span><span class="pill bad" id="age">…</span></header>
+<div id="main"><div class="card off"><div class="big">connecting…</div></div></div>
+<footer><div id="cpu" class="num"></div>
+<nav><a href="/status.html">Details</a><a href="/config.html">Config</a><a href="/calib.html">Calibration</a></nav></footer>
+<script>
+"use strict";
+let last=0,cur=null;
+const E=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const has=v=>v!==null&&v!==undefined;
+const f=(v,d,u)=>typeof v==="number"?v.toFixed(d)+(u||""):"—";
+const len=v=>typeof v!=="number"?"—":(v<1?(v*100).toFixed(1)+" cm":v.toFixed(2)+" m");
+function dur(s){if(typeof s!=="number")return"";const h=Math.floor(s/3600),m=Math.floor(s/60)%60;return h?h+" h "+m+" min":m?m+" min":s+" s";}
+function card(c,lbl,big,rows,extra){
+  return '<div class="card '+c+'"><div class="lbl">'+E(lbl)+'</div><div class="big">'+E(big)+'</div><div class="row num">'+
+    rows.filter(r=>r).map(([k,v])=>'<i>'+E(k)+' <b>'+E(v)+'</b></i>').join("")+'</div>'+(extra||"")+'</div>';
+}
+function chip(c,n,st,d){return '<div class="chip '+c+'"><div class="n">'+E(n)+'</div><div class="st">'+E(st)+'</div><div class="d num">'+E(d||"")+'</div></div>';}
+const FIX={"rtk-fixed":["ok","RTK FIXED"],"rtk-float":["warn","RTK FLOAT"],ppp:["warn","PPP"],dgps:["warn","DGPS"],sbas:["warn","SBAS"],single:["warn","SINGLE"],none:["bad","NO FIX"]};
+function gnssCard(g){
+  if(!g)return card("bad","GNSS fix","no data",[]);
+  if(g.state!=="run")return card(g.error&&g.error!=="ok"?"bad":"warn","GNSS fix",g.state||"—",[["receiver",g.error&&g.error!=="ok"?g.error:"starting"]]);
+  const fx=FIX[g.fix]||(has(g.fix)?["warn",String(g.fix).toUpperCase()]:["bad","NO FIX"]);
+  const sd=Array.isArray(g.sd_m)?Math.hypot(g.sd_m[0],g.sd_m[1]):null;
+  return card(fx[0],"GNSS fix",fx[1],[
+    ["SVs",has(g.sv_used)?g.sv_used+" / "+g.sv_tracked:"—"],
+    ["HDOP",f(g.hdop,1)],
+    has(sd)&&["±",len(sd)],
+    (g.fix&&g.fix!=="single"&&g.fix!=="none")&&["corr",f(g.age_s,1," s")]]);
+}
+function navCard(n){
+  if(!n)return card("bad","Filter","no data",[]);
+  const m=n.mode;
+  const c=m==="FULL"?"ok":(m==="COASTING"||m==="ATTITUDE_ONLY")?"warn":"bad";
+  const r=n.rpy_deg;
+  const rows=[["att",n.attitude_from||"—"]];
+  if(Array.isArray(r))rows.push(["roll",f(r[0],1,"°")],["pitch",f(r[1],1,"°")],["yaw",f(r[2],1,"°")]);
+  if(n.standing_still)rows.push(["","standing still"]);
+  return card(c,"Filter (INSLIB)",m==="ATTITUDE_ONLY"?"ATTITUDE":(m||"—"),rows,n.imu_lost?'<div class="banner">IMU lost: filter stopped</div>':"");
+}
+function posCard(p){
+  if(!p||p.source==="none"||!has(p.lat_deg))return card("bad","Position","none",[["source",p?p.source:"—"]]);
+  const h=has(p.h_geoid_m)?["height "+(p.geoid_model||"geoid"),f(p.h_geoid_m,3," m")]:["h ell",f(p.h_ell_m,3," m")];
+  const rows=[["source",p.source+(p.fix?" · "+p.fix:"")],h,["point",p.point||"—"]];
+  if(p.point==="ground")rows.push(["tilt",p.tilted?f(p.tilt_deg,1,"°"):"vertical"]);
+  return '<div class="card '+(p.source==="ins"?"ok":"warn")+'" id="pos"><div class="lbl">Position · tap to copy</div>'+
+    '<div class="pos num">'+f(p.lat_deg,8)+'<br>'+f(p.lon_deg,8)+'</div><div class="row num">'+
+    rows.map(([k,v])=>'<i>'+E(k)+' <b>'+E(v)+'</b></i>').join("")+'</div></div>';
+}
+function sensors(d){
+  const o=[],i=d.imu,g=d.gnss,b=d.baro,m=d.mag,s=d.speed,fl=d.flow,w=d.wifi,pl=d.pole,h=d.heading,c=d.calib;
+  if(i)o.push(i.state==="run"&&i.error==="ok"?chip("ok","IMU","OK",i.rate_hz+" Hz"+(has(i.temp_c)?" · "+f(i.temp_c,0,"°C"):"")):
+    chip(i.state==="error"||(i.error&&i.error!=="ok")?"bad":"warn","IMU",i.state,i.error!=="ok"?i.error:"starting"));
+  else o.push(chip("bad","IMU","—"));
+  if(g)o.push(g.state==="run"?chip(g.dual_refused?"warn":"ok","GNSS receiver","OK",(g.model||"")+" · "+g.rate_hz+" Hz"+(g.dual_refused?" · dual refused":"")):
+    chip(g.error&&g.error!=="ok"?"bad":"warn","GNSS receiver",g.state,g.error!=="ok"?g.error:"starting"));
+  if(h)o.push(chip(h.fix==="rtk-fixed"?"ok":"warn","GNSS heading",f(h.heading_deg,1,"°"),h.fix+" · ±"+f(h.sd_deg,1,"°")));
+  if(b)o.push(!b.enabled?chip("off","Barometer","off","not fitted"):!b.found?chip("bad","Barometer","missing","not found on I2C"):
+    chip(b.rate_hz>0?"ok":"bad","Barometer",b.rate_hz>0?"OK":"no data",b.rate_hz+" Hz · "+f(b.pressure_pa/100,1," hPa")));
+  if(m){
+    if(m.reason)o.push(chip("warn","Magnetometer",m.state==="withheld"?"withheld":"untrusted",m.reason));
+    else if(m.state==="run")o.push(chip("ok","Magnetometer","OK",f(m.field_ut,0," µT")+" · "+(m.north==="true"?"true N":"mag N")));
+    else o.push(chip("off","Magnetometer","off",""));
+  }
+  if(s)o.push(!s.enabled?chip("off","Wheel speed","off","not fitted"):chip(s.a_hz>0?"ok":"warn","Wheel speed",s.a_hz>0?"pulses":"no pulses",f(s.a_hz,0," Hz")+(s.direction?" · "+s.direction:"")));
+  if(fl)o.push(!fl.enabled?chip("off","Optical flow","off","not fitted"):!fl.link?chip("bad","Optical flow","no link","Pi not sending"):
+    chip(fl.frames_hz>0?"ok":"warn","Optical flow",fl.frames_hz>0?"OK":"no frames",f(fl.frames_hz,0," fps")+(has(fl.features)?" · "+fl.features+" feat":"")));
+  if(w)o.push(chip(w.state==="up"||w.state==="ap"?"ok":"warn","Wi-Fi",w.state==="ap"?"AP":w.state,
+    w.state==="ap"?(w.ap_clients||0)+" client(s)":has(w.rssi_dbm)?w.rssi_dbm+" dBm":w.ssid||""));
+  if(pl)o.push(chip(pl.state==="held"?"ok":pl.state==="planted"?"warn":"off","Pole",pl.state,pl.plants+" plants · "+pl.yaw_fits+" yaw fits"));
+  if(c){const k=["gyro_bias","accelerometer","magnetometer","gyro_matrix"],n=k.filter(x=>String(c[x]||"").startsWith("in use")).length;
+    o.push(chip(c.imu_id!=="ok"?"warn":n?"ok":"off","Calibration",n+" / 4 in use",c.imu_id==="ok"?(c.still?"still":"moving"):"IMU id "+c.imu_id));}
+  return '<div class="grid">'+o.join("")+'</div>';
+}
+function render(d){
+  cur=d;
+  document.getElementById("main").innerHTML=gnssCard(d.gnss)+navCard(d.nav)+posCard(d.position)+sensors(d);
+  document.getElementById("up").textContent=has(d.uptime_s)?"up "+dur(d.uptime_s):"";
+  const c=d.cpu;
+  document.getElementById("cpu").textContent=c?"CPU core0 "+f(c.core0&&c.core0.load_pct,0,"%")+" · core1 "+f(c.core1&&c.core1.load_pct,0,"%")+" · "+f(c.die_temp_c,0,"°C"):"";
+  const p=document.getElementById("pos");
+  if(p)p.onclick=()=>{const t=f(cur.position.lat_deg,8)+","+f(cur.position.lon_deg,8);
+    if(navigator.clipboard)navigator.clipboard.writeText(t).catch(()=>{});};
+}
+async function poll(){
+  try{
+    const r=await fetch("/status.json",{cache:"no-store"});
+    if(r.ok){const d=await r.json();try{render(d);}catch(e){console.error(e);}last=Date.now();}
+  }catch(e){}
+  const a=document.getElementById("age"),s=last?(Date.now()-last)/1000:Infinity,live=s<2.5;
+  a.textContent=live?"LIVE":last?"STALE "+Math.round(s)+" s":"OFFLINE";
+  a.className="pill "+(live?"ok":"bad");
+  document.body.classList.toggle("stale",!live&&!!last);
+  setTimeout(poll,1000);
+}
+poll();
+</script>
+</body>
+</html>

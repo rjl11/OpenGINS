@@ -1,0 +1,92 @@
+# INSLIB integration: use nav_suite
+
+## Context
+The filter is INSLIB (`external/INSLIB`). It can be used as the bare 15/18-state `ins` filter or through the `nav_suite` wrapper. This plan commits to **`nav_suite`** and describes how the firmware feeds it and reads it. IMU details are in [imu-tm210.md](imu-tm210.md). CPU and timing are in [rp2350-feasibility.md](rp2350-feasibility.md).
+
+## Why nav_suite and not bare ins
+`nav_suite_update()` (`external/INSLIB/src/nav_suite.h`) drives five filters from one measurement epoch:
+- **ins**: full navigation filter (position, velocity, attitude, IMU biases).
+- **ars**: roll/pitch filter, yaw free (directional gyro).
+- **ahrs**: roll/pitch/yaw with the magnetometer (only runs once a mag sample has been seen).
+- **baro_alt**: baro/accelerometer vertical channel (BMP581).
+- **local_gnss**: offset between the local height and the WGS84 ellipsoid, so absolute height survives a GNSS outage.
+
+What that buys over bare `ins`:
+- **Graceful degradation**: `nav_suite_get_mode()` returns FULL, COASTING (dead reckoning), ATTITUDE_ONLY (INS lost, AHRS still gives attitude) or NONE. Re-acquisition after an outage is automatic. COASTING lasts at most `max_deadreckoning_sec` after the last position fix (INSLIB default 10 s; the firmware default is 60 s for testing, `APP_MAX_DEADRECKONING_SEC` in `firmware/app/app_config.h`, and the web config page sets it live); then the position is dropped until the next fix. Speed aiding doesn't extend that window.
+- **Best-source getters**: `nav_suite_get_rpy()`, `nav_suite_get_height()`, `nav_suite_get_height_ellipsoid()`.
+- **Heading carry-over**: after an INS re-init, yaw is restored from the last INS heading plus the ARS yaw change (REQ-SUITE-022).
+- **One place for shared settings**: outlier rejection and stillness (auto-ZUPT) thresholds are copied from `ins_options_t` into every sub-filter by `nav_suite_init()`.
+- Same constraints as bare `ins`: no heap, all state in `nav_suite_t`, worst-case stack about 13 KB.
+
+## Lifecycle (core 1)
+1. Zero a static `nav_suite_t`, fill `ins_init_t` and `ins_options_t`, call `nav_suite_init()`. There is no wait for the receiver: `automotive_mode` comes from the antenna-mode setting, which is read from flash at boot. The only re-init is when the setting is dual but core 0 identifies a UM980 ([gnss-um98x-config.md](gnss-um98x-config.md), "INSLIB init and the antenna mode").
+2. Optionally tune `suite.ars_cfg` / `suite.ahrs_cfg` / `suite.baro_cfg` before the first update.
+3. Loop: pop one IMU sample (plus any GNSS/baro that arrived) from the core 0 queue, build an `ins_measurements_t`, call `nav_suite_update()`. One call per TM210 sample, so 800 calls per second. The strapdown runs every call; the covariance prediction runs at `kalman_update_dt_sec` (20 Hz).
+4. After the first usable GNSS fix, and again after moving far (e.g. 50 km), call `nav_suite_set_magnetic_model_position(lat, lon, year)`.
+5. **IMU loss.** INSLIB stops all its filters (mode NONE) once the last IMU sample is 0.2 s old (REQ-NAV-089, REQ-SUITE-027), but it checks only on an epoch. So when no IMU sample has come for 50 ms, core 1 runs an epoch without IMU every 50 ms, with any queued GNSS, baro or speed sample attached; INSLIB then detects the loss and stops. When the IMU returns it re-initialises on its own (biases and origin carried). INSLIB has no GNSS-only mode, so while it is down the outputs take the receiver's own position (`best_position()` in `firmware/app/main.c`). Bench 2026-11-15: NONE within a second of the TM210's RX pin being disconnected, FULL again about 1.2 s after its data returned.
+6. Every 100 ms, copy the outputs into a struct that core 0 reads (BLE, web page, and `$PAOGI` once Ethernet is back from on hold).
+
+## Options for a tractor (AgOpenWeb) setup
+| `ins_options_t` field | Value | Why |
+|---|---|---|
+| `auto_init` | true | Bootstrap from the first good fix; roll/pitch from leveling |
+| `automotive_mode` | true in single-antenna mode on a tractor or a fixed wing; false in dual-antenna mode, and on a survey pole or a multirotor (`nav_params_t.course_yaw`, from the platform in effect since boot) | Yaw from GNSS course over ground. With one antenna (a UM980, or a UM982 with the slave off) this is the main heading source when moving. In dual-antenna mode a UM982 feeds its heading into `m.yaw` instead ([gnss-um98x-config.md](gnss-um98x-config.md)). On a pole the course is not the heading: whoever carries it walks any way the pole faces. There INS yaw has to come from the GNSS velocity while the pole moves and accelerates, as in the Leica GS18 T (`docs/survey-pole/TS04E_luo_schaufler_et_al_9407.pdf`), or from the magnetometer if fitted. Until it converges the ground point is taken straight down (see the output table). Since 2026-11-16 the pole gets a tip constraint, a yaw fix per planted sway and a gated magnetometer ([pole-tilt-aiding.md](pole-tilt-aiding.md)) |
+| `automotive_min_speed_mps` | 0 (default 2 m/s) to start; try ~1 m/s for slow field work | Below it the course is noise |
+| `kalman_update_dt_sec` | 0 (= 20 Hz) | Covariance prediction rate |
+| `auto_zupt_disable` | false | Bias re-estimation whenever the tractor stands still |
+| `gnss_pos_cov_scale`, `gnss_pos_stddev_floor_*` | tune from RTK logs | Receiver σ is often optimistic |
+| `automotive_lateral_constraint` | false until the mount is calibrated | Needs a correct mounting matrix |
+| `imu_acc_misalignment` / `imu_gyr_misalignment`, `imu_*_fixed_bias` | from IMU calibration + mount angles | See [imu-tm210.md](imu-tm210.md) |
+| `mag_field_check_disable` | false (the field-strength gate stays on) | Downweights samples whose field strength is more than 30 % off the WMM value, e.g. near steel or a running engine. See "Magnetometer" |
+| `estimate_mag_bias` | true (18 error states) | Hard-iron bias of the mounted TM210, learned while turning (`APP_ESTIMATE_MAG_BIAS`) |
+
+`ins_init_t`: leave position at zero (auto-init replaces it), set the bias random walks and initial σ from the IMU plan; leave other fields at 0 for INSLIB defaults.
+
+## Building one epoch
+Zero `ins_measurements_t` every epoch. Set `is_valid` only on an epoch that carries a **new** sample (a latched flag re-fuses the same reading and makes the filter overconfident).
+
+| Field | Source | Notes |
+|---|---|---|
+| `timestamp` | TM210 sample time on the Pico µs clock | 64-bit, monotonic |
+| `strapdown_dt_sec` | difference of TM210 timestamps | ~1.25 ms |
+| `acc`, `gyr` | TM210 raw object, converted to FRD SI | `Qll_diag` = PSD, see IMU plan |
+| `mag` | TM210 raw mag in µT, only when the value changed (75 Hz) | `Qll_diag` left 0 (INSLIB default σ). The INS fuses it at most once per second (`magnetometer_min_delay_ms` default 1000) |
+| `gnss_pos` | UM98x BESTNAVB at 20 Hz ([gnss-um98x-config.md](gnss-um98x-config.md)): lat/lon in rad, ellipsoid height = hgt (MSL) + undulation, σ → diagonal `Qll_ned` | Only when solution status is usable |
+| `gnss_vel` | BESTNAVB horizontal speed + track + vertical speed → NED, σ → diagonal `Qll_ned` | |
+| `gnss_leverarm_b` | antenna position relative to the IMU, FRD [m] | Measure on the vehicle |
+| `gnss_delay_ms` / `gnss_delay_us` | IMU epoch time − GNSS time of validity | GNSS time from PPS; INSLIB's history buffer handles the delay |
+| `yaw`, `yaw_delay_ms` / `yaw_delay_us` | Dual-antenna mode only: UM982 UNIHEADINGB heading minus `baseline_yaw_b`, at 20 Hz ([gnss-um98x-config.md](gnss-um98x-config.md)) | Left invalid in single-antenna mode. Same delay as the GNSS epoch |
+| `baro` | BMP581 pressure [Pa], 100 Hz | New samples only |
+
+GNSS and baro samples are attached to the next IMU epoch after they arrive on core 1; the delay fields carry how old they are.
+
+## Magnetometer
+User decision 2026-11-13: the TM210 magnetometer is used from boot, before any on-vehicle calibration (`APP_FEED_MAG`, since 2026-11-15 the default of the web page's magnetometer switch, and `APP_ESTIMATE_MAG_BIAS` in `firmware/app/app_config.h`).
+- **Where it goes:** `m.mag` feeds both the AHRS sub-filter (which only runs once a mag sample has been seen) and the INS. The INS fuses it at most once per second, so it is a weak yaw reference beside GNSS course or the dual-antenna heading. It also gives the INS a heading at auto-init before the tractor moves (single antenna), and the AHRS a heading in ATTITUDE_ONLY.
+- **Declination:** INSLIB's own World Magnetic Model (`external/INSLIB/src/magnetic_model.h`, WMM 2025 grid), set from the first GNSS fix by `nav_suite_set_magnetic_model_position()` (lifecycle step 4). The receiver's value isn't needed: the UM980 does report one (GPRMC magnetic variation, 5.4° E on the bench 2026-11-13), but only in NMEA.
+- **Field-strength gate:** on (`mag_field_check_disable` false). A sample whose |B| is more than 30 % off the WMM total field is downweighted. The TM210's scale is approximate (one factory "Earth field" ≈ 50 µT, [imu-tm210.md](imu-tm210.md)), close enough for the gate in Scandinavia; check it against the WMM value on the bench.
+- **Hard-iron bias:** estimated by the INS (`estimate_mag_bias`, 18 error states, INSLIB defaults 10 µT initial σ and 1 µT/min random walk). It separates from the yaw error only while the vehicle turns.
+- **Still to do:** the on-vehicle calibration with `inslib_mag_calib.py` for `mag_misalignment` / `mag_fixed_bias` ([imu-tm210.md](imu-tm210.md), step 4), and field logs of how often the gate rejects samples on a running tractor. The CPU cost of 18 instead of 15 states is not yet measured (the cycle-count bench in [rp2350-feasibility.md](rp2350-feasibility.md)).
+
+## Outputs (10 Hz)
+`$PAOGI` is the AgOpenWeb sentence sent over Ethernet, which is on hold ([ethernet-w5500-agopenweb.md](ethernet-w5500-agopenweb.md)). For now, BLE NMEA is the only output.
+
+| Output | INSLIB call | Used by |
+|---|---|---|
+| Lat/lon/height | `ins` local position → `nav_suite_local_to_wgs84()`, height from `nav_suite_get_height_ellipsoid()`. GGA and `$PAOGI` carry height above mean sea level, so subtract the undulation from BESTNAVB (and put it in GGA's geoid separation field). On a tractor or a survey pole with the web setting `ant_height_m` above 0, the position is moved from the IMU point by the lever arm plus the antenna height along the body down axis, to the ground point below the antenna ([web-config-server.md](web-config-server.md), version 5 settings). It follows the tilt only while the INS attitude is good: the 1-sigma of the body down axis's direction, from `ins_get_rpy_stddev()` as roll and pitch plus yaw times sin(tilt), at most `APP_GROUND_TILT_MAX_SD_DEG` (2 deg, the Leica GS18 T's threshold, `docs/survey-pole/TS04E_luo_schaufler_et_al_9407.pdf`); otherwise, and with an AHRS / ARS attitude or the receiver's fix, straight down | `$PAOGI`, BLE NMEA |
+| Heading, roll, pitch | `nav_suite_get_rpy()` | `$PAOGI` (AgOpenWeb uses heading and roll) |
+| Speed | INS NED velocity → horizontal speed | `$PAOGI`, RMC |
+| Fix quality | `nav_suite_get_mode()` combined with UM980 RTK status | GGA quality field: FULL keeps the RTK status, COASTING reports dead reckoning. In ATTITUDE_ONLY/NONE, GGA carries the UM980's own position and quality while the receiver has a fix, because SW Maps forwards GGA to the caster ([rtcm-over-bluetooth.md](rtcm-over-bluetooth.md)); it reports no fix only when the receiver has none too |
+
+Antenna vs IMU vs vehicle reference point: output the position of the point AgOpenWeb expects (lever arm applied), not the IMU position.
+
+## Diagnostics (web page)
+Mode, `nav_suite_get_zaru_active()`, `nav_suite_get_vertical_zupt_active()`, `suite.n_imu_loss`, INS vs ARS/AHRS yaw difference, estimated gyro/acc biases, the estimated mag hard-iron bias (`ins_get_bias_mag()`) and measured |B| against the WMM field, IMU temperature from the TM210 status object.
+
+## Verification
+1. Record a drive: TM210 raw, UM980 logs and BMP581 pressure, all timestamped on the Pico clock (SD card or USB). Convert to INSLIB's CSV layout (`external/INSLIB/doc/example_imu.csv`, `example_gnss.csv`).
+2. Run the host `tools/replay.c` build on it and check the trajectory and heading (`tools/ins_kml.py`, `tools/ins_plots.py`).
+3. Feed the same log through the on-target build and compare with the host result.
+4. Simulate a GNSS outage (cut GNSS for 10–30 s in the log) and check that the mode drops to COASTING and recovers to FULL.
+5. Timing: the cycle-count bench in [rp2350-feasibility.md](rp2350-feasibility.md).
+6. Standstill: park for 10 minutes with RTK fixed, and check that the output heading and roll stay steady (auto-ZUPT and ZARU active). This is the failure AgOpenGPS users see without such handling: the AiO v26 Teensy firmware's notes (https://github.com/AgOpenGPS-Official/Firmware_Teensy_AiO_26, `knowledge/STATIONARY_IMU_STABILIZATION.md`, commit `2551bff`, read 2026-11-10) report heading wandering ±5–10° and roll ±1–2° while parked, which shows as jitter and can trigger steering corrections. The figures are theirs, not measured here. Their proposed fix, not in their code yet, freezes heading and roll below 0.3 m/s and releases them above 0.5 m/s.

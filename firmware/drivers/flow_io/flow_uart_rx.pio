@@ -1,0 +1,42 @@
+; Receive-only 8N1 UART for the optical-flow link (common/flow_link.h).
+; After the rx example in pico-examples (pio/uart_rx), without the framing
+; error IRQ: a bad frame is skipped and the link's CRC catches the rest.
+; 8 PIO cycles per bit. Each byte is pushed into the top byte of the RX FIFO
+; word (shift right), so DMA reads it at FIFO address + 3.
+
+.program flow_uart_rx
+
+start:
+    wait 0 pin 0        ; stall until the start bit
+    set x, 7    [10]    ; preload the bit counter, then wait until halfway
+bitloop:                ; through the first data bit (12 cycles incl. wait, set)
+    in pins, 1          ; shift a data bit into the ISR
+    jmp x-- bitloop [6] ; 8 cycles per loop
+    jmp pin good_stop   ; stop bit must be high
+    wait 1 pin 0        ; framing error or break: wait for idle, drop the byte
+    jmp start
+good_stop:
+    push                ; no delay: slack for a slightly fast transmitter
+
+% c-sdk {
+#include "hardware/clocks.h"
+#include "hardware/gpio.h"
+
+static inline void flow_uart_rx_program_init(PIO pio, uint sm, uint offset, uint pin, uint baud)
+{
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, false);
+    pio_gpio_init(pio, pin);
+    gpio_pull_up(pin);
+
+    pio_sm_config c = flow_uart_rx_program_get_default_config(offset);
+    sm_config_set_in_pins(&c, pin);
+    sm_config_set_jmp_pin(&c, pin);
+    sm_config_set_in_shift(&c, true, false, 32);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+    float div = (float)clock_get_hz(clk_sys) / (8.0f * (float)baud);
+    sm_config_set_clkdiv(&c, div);
+
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}
