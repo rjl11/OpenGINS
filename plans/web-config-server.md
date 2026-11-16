@@ -67,7 +67,7 @@ A cmake option `WEB_MODE` selects it, passed to the code as `APP_WEB_MODE` in `a
 The same pages could also be served over the W5500 (ioLibrary has a small HTTP server), so the device can be configured from the tractor network without Wi-Fi. See [ethernet-w5500-agopenweb.md](ethernet-w5500-agopenweb.md).
 
 ## Software stack (stays bare metal)
-- lwIP in `NO_SYS=1` mode via `pico_cyw43_arch_lwip_threadsafe_background`. BTstack later uses the same `cyw43_arch` (BUILDING.md). This fits the bare-metal layout in [rtos-decision.md](rtos-decision.md): everything network-related runs on core 0, the filter stays alone on core 1.
+- lwIP in `NO_SYS=1` mode via `pico_cyw43_arch_lwip_threadsafe_background`. BTstack later uses the same `cyw43_arch` (CLAUDE.md). This fits the bare-metal layout in [rtos-decision.md](rtos-decision.md): everything network-related runs on core 0, the filter stays alone on core 1.
 - A `lwipopts.h` in `firmware/app/`, sized from pico-examples' `lwipopts_examples_common.h`, with `LWIP_MDNS_RESPONDER` and the httpd options added.
 - HTTP server: the Pico SDK's `pico_lwip_http` (lwIP httpd). Static pages are compiled into flash with `makefsdata`.
 - The web code is its own module (`firmware/app/web/`). `main.c` fills a snapshot struct once a second from the same data `print_status()` prints. The HTTP handlers only read that snapshot and never reach into driver state, so a later move to a FreeRTOS task on core 0 needs no change to the handlers.

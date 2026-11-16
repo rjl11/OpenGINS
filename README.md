@@ -37,6 +37,7 @@ The GPIO assignments are all in [`firmware/app/board_pins.h`](firmware/app/board
 | `docs/` | Datasheets, receiver manuals and receiver firmware builds |
 | `external/` | Git submodules: INSLIB (the filter), the Bosch BMP5 driver API, and reference copies of the Adafruit BMP5 library and the OV9281 camera repository |
 | `BUILDING.md` | Building, flashing, testing, and the rules for the code |
+| `CLAUDE.md` | Guidance for working on the code with Claude Code: architecture, core split, layout, conventions |
 | `TODO.md` | Open work items, each linked to its plan |
 
 ## Getting the code
@@ -97,3 +98,4 @@ Because INSLIB is AGPL-3.0, a firmware binary built from this repository is also
 - [plans/README.md](plans/README.md): design and hardware decisions, with an index.
 - [TODO.md](TODO.md): open work and what has been tested so far.
 - [BUILDING.md](BUILDING.md): building, flashing and debugging, host tests, and the rules for the code.
+- [CLAUDE.md](CLAUDE.md): guidance for Claude Code (and anyone else) on the architecture, the code layout and the conventions.

@@ -77,7 +77,7 @@ A platform setting chooses the gates: tractor, pole, multirotor or fixed-wing (u
 Per term group: value, σ, source, number of poses / rotations / turns, sphere coverage, last update, and the reason for any rejection. Buttons: accept a pending set, reject it, reset to bench / factory, clear the collected data. Built in Phase 5 (below): a mode per group (auto or hold) instead of a separate "pending" state.
 
 ## Where it runs
-Core 0, as its own module with queues to the rest ("Rules for the code" in `BUILDING.md`). It takes the raw samples core 0 already parses (before any calibration) and core 1's 100 ms outputs (attitude, mode, σ, ZUPT flag). Nothing is added to core 1. The solves are small (at most 12 parameters over about 30 poses or a few hundred magnetometer samples), so a few milliseconds each when there is new data (estimate). The only new per-sample work is the pre-integration during a rotation.
+Core 0, as its own module with queues to the rest ("Core split" in `CLAUDE.md`). It takes the raw samples core 0 already parses (before any calibration) and core 1's 100 ms outputs (attitude, mode, σ, ZUPT flag). Nothing is added to core 1. The solves are small (at most 12 parameters over about 30 poses or a few hundred magnetometer samples), so a few milliseconds each when there is new data (estimate). The only new per-sample work is the pre-integration during a rotation.
 
 ## Phases
 1. **Gyro bias and its temperature model, plus persistence.** The calibration record in flash, the stillness detector, the bias-vs-temperature fit, applied at boot. Useful on every platform.
