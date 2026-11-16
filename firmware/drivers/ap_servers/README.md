@@ -1,6 +1,6 @@
 # ap_servers
 
-The small DHCP and DNS servers the open access point `gnss_smart` needs ([plans/web-config-server.md](../../../plans/web-config-server.md), Phase 3).
+The small DHCP and DNS servers the open access point `OpenGINS` needs ([plans/web-config-server.md](../../../plans/web-config-server.md), Phase 3).
 
 Copied unchanged from pico-examples, `pico_w/wifi/access_point/` at commit `0d62f75` (2026-09-03):
 

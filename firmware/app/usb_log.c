@@ -170,7 +170,7 @@ static void log_set(bool on)
         PK(&p, (uint8_t)USB_LOG_VERSION);
         PK(&p, time_us_64());
         PK(&p, (uint32_t)clock_get_hz(clk_sys));
-        static const char k_name[] = "gnss_smart";
+        static const char k_name[] = "OpenGINS";
         memcpy(&p.b[p.n], k_name, sizeof k_name - 1);
         p.n += sizeof k_name - 1;
         record(USB_LOG_START, p.b, p.n);

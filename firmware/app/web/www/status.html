@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>gnss_smart details</title>
+<title>OpenGINS details</title>
 <style>
 :root{--bg:#f5f6f8;--card:#fff;--fg:#1c1f24;--dim:#6b7280;--line:#e3e6ea;--ok:#15803d;--bad:#b91c1c}
 @media (prefers-color-scheme:dark){:root{--bg:#111316;--card:#1b1e23;--fg:#e6e8eb;--dim:#9aa1ab;--line:#2b2f36;--ok:#4ade80;--bad:#f87171}}
@@ -26,7 +26,7 @@ td:last-child{font-variant-numeric:tabular-nums;word-break:break-word}
 </style>
 </head>
 <body>
-<header><h1>gnss_smart</h1><a href="/" style="color:inherit">phone view</a><a href="/config.html" style="color:inherit">config</a><a href="/calib.html" style="color:inherit">calibration</a><span id="age">connecting…</span></header>
+<header><h1>OpenGINS</h1><a href="/" style="color:inherit">phone view</a><a href="/config.html" style="color:inherit">config</a><a href="/calib.html" style="color:inherit">calibration</a><span id="age">connecting…</span></header>
 <main id="main"></main>
 <script>
 "use strict";
@@ -69,7 +69,7 @@ function render(d){
   const top=[];
   if(d.fw)top.push(d.fw);
   if(d.uptime_s!==undefined)top.push("up "+d.uptime_s+" s");
-  document.querySelector("h1").textContent="gnss_smart"+(top.length?" · "+top.join(" · "):"");
+  document.querySelector("h1").textContent="OpenGINS"+(top.length?" · "+top.join(" · "):"");
 }
 async function poll(){
   try{

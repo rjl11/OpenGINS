@@ -47,7 +47,7 @@ Pass them on the `cmake -S` line with `-D<option>=<value>`. Change one by runnin
 | `GNSS_ANTENNA_MODE` | `single`, `dual` | One antenna, or two for a UM982 with GNSS heading. The web page can override it (applied at reboot) |
 | `PLATFORM` | `pole`, `tractor`, `multirotor`, `fixed_wing` | When the GNSS course counts as a heading for the magnetometer calibration. `pole` also sets an antenna height of 2 m. The web page can override it (applied at reboot) |
 | `WEB_MODE` | `always`, `switch`, `off` | Wi-Fi and the web page always on; only when GPIO22 is pulled to GND at boot; or built without Wi-Fi |
-| `WIFI_MODE` | `auto`, `sta`, `ap` | Join a network and fall back to the open access point `gnss_smart` (192.168.4.1) if it hasn't joined within 30 s; station only; or the access point from boot |
+| `WIFI_MODE` | `auto`, `sta`, `ap` | Join a network and fall back to the open access point `OpenGINS` (192.168.4.1) if it hasn't joined within 30 s; station only; or the access point from boot |
 | `WIFI_STA_SSID` | see `firmware/CMakeLists.txt` | Network to join |
 | `WIFI_STA_PASSWORD` | empty (open network) | Password for that network |
 
@@ -115,7 +115,7 @@ gdb-multiarch firmware/build/app.elf -ex "target extended-remote :3333"
 
 ## Run
 
-The firmware prints a status report once a second on its USB serial port (USB CDC, so any terminal and any baud setting). UART0 is the IMU, so there is no stdio on a UART. With Wi-Fi on, the report includes the IP address; the web page is at that address or `gnss-smart.local`. Commands typed on the USB port include `log on` for the field-test log, recorded and decoded with:
+The firmware prints a status report once a second on its USB serial port (USB CDC, so any terminal and any baud setting). UART0 is the IMU, so there is no stdio on a UART. With Wi-Fi on, the report includes the IP address; the web page is at that address or `opengins.local`. Commands typed on the USB port include `log on` for the field-test log, recorded and decoded with:
 
 ```bash
 python firmware/tools/field_log.py --help

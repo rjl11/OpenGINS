@@ -80,7 +80,7 @@ a(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" he
   f'font-family="Segoe UI, Helvetica, Arial, sans-serif">')
 a(f'<rect width="{W}" height="{H}" fill="#ffffff"/>')
 a(f'<g transform="translate({OX},0)">')
-text(-20, 42, "gnss_smart: wiring to the Pico 2 W", 22, weight="bold")
+text(-20, 42, "OpenGINS: wiring to the Pico 2 W", 22, weight="bold")
 text(-20, 64, "Pin map from firmware/app/board_pins.h (suggested assignments). Board viewed from the top, USB at the top. "
      "Physical header pin numbers in grey.", 12, fill=C["mute"])
 

@@ -1,5 +1,5 @@
 /*
- * lwIP options for gnss_smart: NO_SYS, used through
+ * lwIP options for OpenGINS: NO_SYS, used through
  * pico_cyw43_arch_lwip_threadsafe_background on core 0 (plans/web-config-server.md).
  * Sized from pico-examples' lwipopts_examples_common.h, with a smaller TCP
  * window: the pages are a few KB and one or two browsers poll at 1 Hz.

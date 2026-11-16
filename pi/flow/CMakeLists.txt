@@ -4,7 +4,7 @@
 #   cmake -S pi/flow -B pi/flow/build -G Ninja && ninja -C pi/flow/build
 #   pi/flow/build/test_flow
 cmake_minimum_required(VERSION 3.16)
-project(gnss_smart_flow CXX)
+project(opengins_flow CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>gnss_smart config</title>
+<title>OpenGINS config</title>
 <style>
 :root{--bg:#f5f6f8;--card:#fff;--fg:#1c1f24;--dim:#6b7280;--line:#e3e6ea;--ok:#15803d;--bad:#b91c1c;--acc:#1d4ed8;--warn:#a16207}
 @media (prefers-color-scheme:dark){:root{--bg:#111316;--card:#1b1e23;--fg:#e6e8eb;--dim:#9aa1ab;--line:#2b2f36;--ok:#4ade80;--bad:#f87171;--acc:#93b4ff;--warn:#facc15}}
@@ -29,7 +29,7 @@ button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
 </style>
 </head>
 <body>
-<header><h1>gnss_smart · config</h1><a href="/">status</a><a href="/status.html">details</a><a href="/calib.html">calibration</a><span id="src" class="note"></span></header>
+<header><h1>OpenGINS · config</h1><a href="/">status</a><a href="/status.html">details</a><a href="/calib.html">calibration</a><span id="src" class="note"></span></header>
 <div id="msg"></div>
 <form id="f" autocomplete="off">
 <main>
@@ -76,7 +76,7 @@ button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
 <label><span>dead reckoning<small>s, 0 = INSLIB default (10 s)</small></span><input name="max_deadreckoning_s" inputmode="decimal"></label>
 </section>
 <section><h2>Wi-Fi</h2>
-<p class="note">Applies after a reboot. The access point gnss_smart is open, at 192.168.4.1.</p>
+<p class="note">Applies after a reboot. The access point OpenGINS is open, at 192.168.4.1.</p>
 <label><span>mode</span><select name="wifi_mode"><option value="auto">auto (AP if no network in 30 s)</option><option value="sta">network only</option><option value="ap">access point only</option></select></label>
 <label><span>network</span><input name="sta_ssid" maxlength="32"></label>
 <label><span>password<small id="pwnote">empty = open network</small></span><input name="sta_password" type="password" maxlength="63" placeholder="unchanged"></label>

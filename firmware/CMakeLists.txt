@@ -1,4 +1,4 @@
-# gnss_smart firmware: sensor bring-up + INSLIB nav_suite demo (Pico 2 W, bare metal).
+# OpenGINS firmware: sensor bring-up + INSLIB nav_suite demo (Pico 2 W, bare metal).
 #
 # Build (PICO_SDK_PATH set; options, flashing and small build hosts in BUILDING.md):
 #   cmake -S firmware -B firmware/build -G Ninja
@@ -14,7 +14,7 @@ endif()
 
 include(pico_sdk_import.cmake)
 
-project(gnss_smart C CXX ASM)
+project(opengins C CXX ASM)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 
@@ -92,7 +92,7 @@ set(WEB_MODE always CACHE STRING "Web server: always, switch or off")
 set_property(CACHE WEB_MODE PROPERTY STRINGS always switch off)
 set(WIFI_STA_SSID "MyWiFi" CACHE STRING "Wi-Fi network to join")
 set(WIFI_STA_PASSWORD "" CACHE STRING "Wi-Fi password; empty for an open network")
-# auto: station, open AP gnss_smart if not joined within 30 s of boot.
+# auto: station, open AP OpenGINS if not joined within 30 s of boot.
 # sta: station only. ap: open AP from boot.
 set(WIFI_MODE auto CACHE STRING "Wi-Fi network mode: auto, sta or ap")
 set_property(CACHE WIFI_MODE PROPERTY STRINGS auto sta ap)
@@ -119,7 +119,7 @@ if(WEB_MODE STREQUAL "always" OR WEB_MODE STREQUAL "switch")
         APP_WIFI_MODE=${APP_WIFI_MODE_VALUE}
         "APP_WIFI_STA_SSID=\"${WIFI_STA_SSID}\""
         "APP_WIFI_STA_PASSWORD=\"${WIFI_STA_PASSWORD}\""
-        "CYW43_HOST_NAME=\"gnss-smart\""
+        "CYW43_HOST_NAME=\"opengins\""
     )
     target_link_libraries(app PRIVATE
         pico_cyw43_arch_lwip_threadsafe_background

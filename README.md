@@ -62,7 +62,7 @@ The output is `firmware/build/app.uf2`; copy it to the BOOTSEL drive. [BUILDING.
 
 ## Use
 
-- **Web page.** The Pico joins the network named by `WIFI_STA_SSID` and prints its IP address on USB. It is also reachable as `gnss-smart.local`. If it cannot join within 30 s, it opens the access point `gnss_smart` at 192.168.4.1.
+- **Web page.** The Pico joins the network named by `WIFI_STA_SSID` and prints its IP address on USB. It is also reachable as `opengins.local`. If it cannot join within 30 s, it opens the access point `OpenGINS` at 192.168.4.1.
 - **Status.** `/status.json` gives the live state of the sensors, the filter and the receiver. The ellipsoid height comes with `h_geoid_m` (RH 2000 height) and `geoid_model` (which geoid was used).
 - **Field logs.** Send `log on` on the USB port to record every sensor, the filter output and the flow link as binary records. Decode them with `firmware/tools/field_log.py`.
 

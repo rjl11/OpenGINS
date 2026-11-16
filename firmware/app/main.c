@@ -1,5 +1,5 @@
 /*
- * gnss_smart demo: sensor bring-up and INSLIB fused output.
+ * OpenGINS demo: sensor bring-up and INSLIB fused output.
  *
  * Core 0 (this file): UART DMA, the TM210 and UM980 drivers with their boot
  * provisioning, the BMP581, and a status report on USB once a second.
@@ -1015,7 +1015,7 @@ static void publish_status_json(uint64_t now, uint32_t baro_hz)
     web_get_info(&wi);
     jw_init(&w, buf, sizeof buf);
     jw_obj(&w, NULL);
-    jw_str(&w, "fw", "gnss_smart demo");
+    jw_str(&w, "fw", "OpenGINS demo");
     jw_int(&w, "uptime_s", (long long)(now / 1000000u));
 
     char ip[16];
@@ -1615,7 +1615,7 @@ int main(void)
     while (!stdio_usb_connected() && !time_reached(usb_until)) {
         sleep_ms(10);
     }
-    printf("\ngnss_smart demo: TM210 + UM980 + BMP581 -> INSLIB nav_suite\n");
+    printf("\nOpenGINS demo: TM210 + UM980 + BMP581 -> INSLIB nav_suite\n");
 
     /* Settings from flash, or the build defaults. A record that fails the
      * range check (e.g. written by an older build) is not used. */

@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1180" width="1200" height="1180" font-family="Segoe UI, Helvetica, Arial, sans-serif">
 <rect width="1200" height="1180" fill="#ffffff"/>
 <g transform="translate(50,0)">
-<text x="-20" y="42" font-size="22" text-anchor="start" fill="#1f2937" font-weight="bold" >gnss_smart: wiring to the Pico 2 W</text>
+<text x="-20" y="42" font-size="22" text-anchor="start" fill="#1f2937" font-weight="bold" >OpenGINS: wiring to the Pico 2 W</text>
 <text x="-20" y="64" font-size="12" text-anchor="start" fill="#6b7280" font-weight="normal" >Pin map from firmware/app/board_pins.h (suggested assignments). Board viewed from the top, USB at the top. Physical header pin numbers in grey.</text>
 <rect x="540" y="150" width="160" height="670" rx="10" fill="#0b6b3a" stroke="#064e2a" stroke-width="2"/>
 <rect x="594.0" y="136" width="52" height="30" rx="4" fill="#c7ccd1" stroke="#8a9096"/>

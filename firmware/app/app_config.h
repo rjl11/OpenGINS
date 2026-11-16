@@ -324,11 +324,11 @@
 #ifndef APP_WIFI_MODE
 #define APP_WIFI_MODE               APP_WIFI_AUTO
 #endif
-#define APP_WIFI_AP_SSID            "gnss_smart"
+#define APP_WIFI_AP_SSID            "OpenGINS"
 #define APP_WIFI_AP_FALLBACK_S      30
 
-/* DHCP and mDNS name: http://gnss-smart.local/ where mDNS resolves. */
-#define APP_WEB_HOSTNAME            "gnss-smart"
+/* DHCP and mDNS name: http://opengins.local/ where mDNS resolves. */
+#define APP_WEB_HOSTNAME            "opengins"
 
 /* Optical-flow camera trigger (plans/optical-flow-aiding.md, drivers/flow_io).
  * The PWM runs from boot whether a camera is wired or not; one pulse in

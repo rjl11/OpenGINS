@@ -1,4 +1,4 @@
-# DHCP and DNS servers for the open access point gnss_smart
+# DHCP and DNS servers for the open access point OpenGINS
 # (plans/web-config-server.md, Phase 3). Copied unchanged from pico-examples
 # (pico_w/wifi/access_point, commit 0d62f75); see README.md.
 #

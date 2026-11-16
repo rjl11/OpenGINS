@@ -1,6 +1,6 @@
 # Plans
 
-Planning documents for gnss_smart: system architecture, hardware selection (MCU, sensors), sensor fusion design and roadmap.
+Planning documents for OpenGINS: system architecture, hardware selection (MCU, sensors), sensor fusion design and roadmap.
 
 | Plan | Topic |
 |---|---|
@@ -21,7 +21,7 @@ Planning documents for gnss_smart: system architecture, hardware selection (MCU,
 | [wheel-odometry-aiding.md](wheel-odometry-aiding.md) | Wheel and radar ground speed on a tractor (ISO 11786 at 130 pulses/m, ISOBUS, a Hall pickup or a quadrature encoder on two inputs) into INSLIB's speed input: one rear wheel corrected with the gyro turn rate, auto-learning of pulses per metre and geometry under RTK (user only wires pulses), field tests live plus a USB log of every sensor and the flow link, input stage, pins; why the steering angle is not fused |
 | [pole-tilt-aiding.md](pole-tilt-aiding.md) | Survey pole: heading and tilt from the natural sway of a planted pole (planted-tip detector, tip constraint into INSLIB, linear yaw fix per episode, magnetometer trust gate), after the Leica GS18 T and Wuhan tilt-RTK papers in `docs/survey-pole/` |
 | [rtos-decision.md](rtos-decision.md) | Bare metal; FreeRTOS on core 0 only on a named trigger (re-evaluated 2026-11-16) |
-| [web-config-server.md](web-config-server.md) | Web config and diagnostics: always on in development (station on `MyWiFi`), open AP `gnss_smart` later, GPIO22 switch for production; flash memory layout with the hot path in SRAM |
+| [web-config-server.md](web-config-server.md) | Web config and diagnostics: always on in development (station on `MyWiFi`), open AP `OpenGINS` later, GPIO22 switch for production; flash memory layout with the hot path in SRAM |
 
 ## On hold
 These plans are not part of the current build, but they are kept for later.

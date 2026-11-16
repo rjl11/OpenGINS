@@ -1,4 +1,4 @@
-/* gnss_smart: code that runs from SRAM in the flash (XIP) build.
+/* OpenGINS: code that runs from SRAM in the flash (XIP) build.
  *
  * Overrides the Pico SDK file of the same name (pico_standard_link). Every
  * input file excluded here leaves flash .text and is picked up by the

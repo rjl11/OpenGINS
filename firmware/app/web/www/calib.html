@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>gnss_smart calibration</title>
+<title>OpenGINS calibration</title>
 <style>
 :root{--bg:#f5f6f8;--card:#fff;--fg:#1c1f24;--dim:#6b7280;--line:#e3e6ea;--ok:#15803d;--bad:#b91c1c;--acc:#1d4ed8;--warn:#a16207}
 @media (prefers-color-scheme:dark){:root{--bg:#111316;--card:#1b1e23;--fg:#e6e8eb;--dim:#9aa1ab;--line:#2b2f36;--ok:#4ade80;--bad:#f87171;--acc:#93b4ff;--warn:#facc15}}
@@ -33,7 +33,7 @@ button:disabled{opacity:.45;cursor:default}
 </style>
 </head>
 <body>
-<header><h1>gnss_smart · IMU calibration</h1><a href="/">status</a><a href="/status.html">details</a><a href="/config.html">config</a><span id="top" class="note">connecting…</span></header>
+<header><h1>OpenGINS · IMU calibration</h1><a href="/">status</a><a href="/status.html">details</a><a href="/config.html">config</a><span id="top" class="note">connecting…</span></header>
 <div id="msg"></div>
 <p class="note">Learned in the background. <b>auto</b>: each boot applies the fit of the data (after the range checks). <b>hold</b>: boot keeps the stored set until you accept. <b>Accept</b> and <b>Factory</b> change the correction at once and restart the filter, so the unit must be still.</p>
 <main id="main"></main>

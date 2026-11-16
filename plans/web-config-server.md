@@ -1,11 +1,13 @@
 # Web server for configuration and diagnostics (Pico 2 W)
 
 ## Context
-Host a small web server on the Pico 2 W's on-board CYW43439 Wi-Fi for configuration and diagnostics. **During development it runs all the time**: at boot the Pico joins the open network `MyWiFi` as a station and serves the pages there. An open access point `gnss_smart` comes later, for the field where no router is around. The production behaviour (Wi-Fi off unless the GPIO22 switch says so, so power stays low and the filter undisturbed) is kept as a later build option.
+Host a small web server on the Pico 2 W's on-board CYW43439 Wi-Fi for configuration and diagnostics. **During development it runs all the time**: at boot the Pico joins the open network `MyWiFi` as a station and serves the pages there. An open access point `OpenGINS` comes later, for the field where no router is around. The production behaviour (Wi-Fi off unless the GPIO22 switch says so, so power stays low and the filter undisturbed) is kept as a later build option.
 
 Bluetooth stays on all the time, because it carries the RTCM corrections from SW Maps ([rtcm-over-bluetooth.md](rtcm-over-bluetooth.md)), so Wi-Fi and Bluetooth must run together.
 
 Adding Wi-Fi also forces a change to the memory layout: the image can no longer run entirely from SRAM (see "Memory layout").
+
+Names: the access point is `OpenGINS` and the DHCP / mDNS hostname `opengins` (`opengins.local`) since the project was renamed on 2026-11-16. The bench results below were taken before that, when the firmware used `gnss_smart` and `gnss-smart.local`; they are quoted with the new names.
 
 ## When Wi-Fi runs
 A cmake option `WEB_MODE` selects it, passed to the code as `APP_WEB_MODE` in `app_config.h`, with the same pattern as `GNSS_ANTENNA_MODE` in `firmware/CMakeLists.txt`:
@@ -26,8 +28,8 @@ A cmake option `WEB_MODE` selects it, passed to the code as `APP_WEB_MODE` in `a
 - On a failure (`CYW43_LINK_FAIL`, `NONET`, `BADAUTH`) or a lost link, retry with a backoff (5 s doubling to 30 s). The address comes from lwIP's DHCP client.
 - Finding the device:
   - The USB status report prints the Wi-Fi state and IP address every second.
-  - DHCP hostname `gnss-smart`, so it shows by name in the router's lease list.
-  - lwIP mDNS (`LWIP_MDNS_RESPONDER`) as `gnss-smart.local`. Many Android browsers don't resolve `.local`, so the IP from USB or the router stays the fallback.
+  - DHCP hostname `opengins`, so it shows by name in the router's lease list.
+  - lwIP mDNS (`LWIP_MDNS_RESPONDER`) as `opengins.local`. Many Android browsers don't resolve `.local`, so the IP from USB or the router stays the fallback.
 
 **Implemented (2026-11-13), build-checked, not yet run on hardware:**
 - `firmware/app/web/web.c`: `web_init()` (CYW43 init, station mode, hostname, httpd, mDNS with an `_http._tcp` service), `web_poll()` (join timeout 30 s, retry backoff 5 → 10 → 20 → 30 s, RSSI every 2 s, LED), `web_set_status_json()`.
@@ -43,12 +45,12 @@ A cmake option `WEB_MODE` selects it, passed to the code as `APP_WEB_MODE` in `a
 - The flash image boots and runs. `[web] init done in 860 ms` (CYW43439 firmware load, blocking, before the sensor UARTs start). Joined `MyWiFi` (open) about 3 s later at RSSI around −50 dBm, DHCP address 192.0.2.52; no drops over the test.
 - From a PC on the same network: `/` is 3457 B in about 8–30 ms, `/status.json` about 700 B. 60 sequential requests at 5 Hz: 60 × 200, worst 0.21 s. 6 parallel requests: all 200 (the pool has 3 JSON buffers, so the transfers were short enough to never overlap more than that). The JSON parses as valid, with `null` for the missing sensor values.
 - The page in a browser updates every second and shows the missing sensors in red.
-- `gnss-smart.local` resolves on Windows 10 (`ping`), `Resolve-DnsName` doesn't use mDNS. Not tried on Android yet.
+- `opengins.local` resolves on Windows 10 (`ping`), `Resolve-DnsName` doesn't use mDNS. Not tried on Android yet.
 - One unexplained miss: the very first `Invoke-WebRequest` from PowerShell to both URLs timed out after the TCP connection opened; every request after that (curl, PowerShell, browser) worked. Watch for it again.
 - **Not tested yet, needs the sensors:** core 1 `update_us_max` against the old `copy_to_ram` build, and the ring-overflow counters with the IMU at 800 Hz while the page polls. With no data flowing, the counters staying at 0 says nothing. Also still open: re-join after a router power-cycle.
 
-### Open access point `gnss_smart` (Phase 3)
-- `cyw43_arch_enable_ap_mode("gnss_smart", NULL, CYW43_AUTH_OPEN)`, fixed address 192.168.4.1/24. Open, with no password, by decision (see "Security").
+### Open access point `OpenGINS` (Phase 3)
+- `cyw43_arch_enable_ap_mode("OpenGINS", NULL, CYW43_AUTH_OPEN)`, fixed address 192.168.4.1/24. Open, with no password, by decision (see "Security").
 - Needs the small DHCP server from pico-examples (`pico_w/wifi/access_point/dhcpserver`), and optionally its DNS server so any hostname resolves to the device. Copy them into `firmware/drivers/` with their licence.
 - **When to use it (decided 2026-11-13): fall back and stay.** If the station hasn't had a link since boot within 30 s (`APP_WIFI_AP_FALLBACK_S`), the station is stopped and the AP runs until the next reboot. Nothing switches back, so no station join moves the AP's channel under connected phones. A station link that came up once and dropped later keeps retrying the station, as in Phase 2. The config page can select AP once Phase 4 exists.
 - cmake `-DWIFI_MODE=auto|sta|ap`: `auto` is the rule above (default), `sta` never starts the AP, `ap` runs the AP from boot (used to test it next to a working router).
@@ -56,9 +58,9 @@ A cmake option `WEB_MODE` selects it, passed to the code as `APP_WEB_MODE` in `a
 **Implemented (2026-11-13):** `start_ap()` in `firmware/app/web/web.c`. The servers are in `firmware/drivers/ap_servers/` (an INTERFACE library, so the sources compile with the app's `lwipopts.h`; vendor files unchanged, `-Wno-unused-parameter` for them only). DHCP hands out up to 8 addresses from 192.168.4.16; DNS answers every name with 192.168.4.1, so a phone's captive-portal check lands on the status page. mDNS also runs on the AP. The LED blinks fast in AP mode. The status line and `/status.json` show the AP SSID and `ap_clients`. Note: `cyw43_wifi_ap_get_stas()` with a NULL MAC buffer returns the maximum (10), not the count, so it is called with a buffer.
 
 **Bench results (2026-11-13, bare Pico 2 W):**
-- Fallback: built with a station SSID that doesn't exist. Join attempts failed with "network not found" (backoff 5, 10, 20 s), and at 33 s the log shows `no station link: open AP "gnss_smart"`. A scan from miniPi sees `gnss_smart` on channel 3 at −54 dBm, open (no Privacy bit, no RSN or WPA element).
+- Fallback: built with a station SSID that doesn't exist. Join attempts failed with "network not found" (backoff 5, 10, 20 s), and at 33 s the log shows `no station link: open AP "OpenGINS"`. A scan from miniPi sees `OpenGINS` on channel 3 at −54 dBm, open (no Privacy bit, no RSN or WPA element).
 - Forced AP (`WIFI_MODE=ap`): AP up at boot, init 901 ms, `clients 0`.
-- Client test from dietpi (a Pi on Ethernet, 192.0.2.51, using its spare `wlan0`): `iw connect gnss_smart` associated at −45 dBm. dhclient got 192.168.4.16 with router and DNS 192.168.4.1 and a 24 h lease, and the Pico logged `DHCPS: client connected ... host="DietPi"` and `clients 1`. Over the AP: `/` 3457 B in 20 ms, `/status.json` in 7 ms, 30 of 30 requests OK. DNS at 192.168.4.1 answers `example.com` and `connectivitycheck.gstatic.com` with 192.168.4.1, and an mDNS query for `gnss-smart.local` is answered with 192.168.4.1. dietpi's `wlan0` was put back down afterwards.
+- Client test from dietpi (a Pi on Ethernet, 192.0.2.51, using its spare `wlan0`): `iw connect OpenGINS` associated at −45 dBm. dhclient got 192.168.4.16 with router and DNS 192.168.4.1 and a 24 h lease, and the Pico logged `DHCPS: client connected ... host="DietPi"` and `clients 1`. Over the AP: `/` 3457 B in 20 ms, `/status.json` in 7 ms, 30 of 30 requests OK. DNS at 192.168.4.1 answers `example.com` and `connectivitycheck.gstatic.com` with 192.168.4.1, and an mDNS query for `opengins.local` is answered with 192.168.4.1. dietpi's `wlan0` was put back down afterwards.
 - **Not tested yet:** an Android phone (captive-portal popup, whether it keeps the connection without internet, `.local` in the browser).
 
 ### Over Ethernet (on hold with the W5500)
@@ -125,7 +127,7 @@ BLE and Wi-Fi can run together on the CYW43439, but they share airtime and RAM. 
 - **Bench results (bare Pico 2 W, 2026-11-13):** out-of-range, non-numeric and unknown fields and a bad action are all refused with a message, and nothing is saved. A save applies the lever arm live (filter restarted) and marks the antenna mode as waiting for a reboot. After a reboot the unit came back with `source flash`, record 1, and the boot log showed "GNSS antenna mode setting: dual". Records 2–4 went to alternating sectors. A save takes 34 ms (measured) when the target sector holds an old record and 3 ms when it is already blank; core 0's interrupts are off for that time. Revert to defaults plus a reboot came back on the defaults. The reconfigure actions reach both drivers. Not tested: a power cut during a save, and the effect of a save on the IMU ring and on core 1 timing with the sensors connected.
 
 ## Security
-- Development builds join an open network and serve pages without a login. The AP `gnss_smart` is also open, by decision. So anyone in Wi-Fi range can read the diagnostics and, from Phase 4, change the configuration.
+- Development builds join an open network and serve pages without a login. The AP `OpenGINS` is also open, by decision. So anyone in Wi-Fi range can read the diagnostics and, from Phase 4, change the configuration.
 - What limits the damage: every POST field is checked against a range before it is stored, and the whole save is rejected if any field is out of range; the passthrough blocks `CONFIG RXTYPE`; the production `switch` build keeps Wi-Fi off unless the switch is set.
 - A password for the AP or the pages can be added later without changing the rest of this plan.
 - Firmware update over the web (OTA) is out of scope for now. If added, it needs a signed image and the RP2350 A/B partition support.
@@ -133,7 +135,7 @@ BLE and Wi-Fi can run together on the CYW43439, but they share airtime and RAM. 
 ## Phases
 1. **Memory layout:** flash binary with the hot path and ISRs in SRAM, no Wi-Fi yet. Build, then compare core 1 timing on the bench.
 2. **Station:** join `MyWiFi`, status page and `/status.json`, IP on USB, DHCP hostname and mDNS.
-3. **Access point:** open `gnss_smart` with the DHCP server, and the fallback rule.
+3. **Access point:** open `OpenGINS` with the DHCP server, and the fallback rule.
 4. **Configuration:** config page, flash storage, "Reconfigure GNSS / IMU" buttons.
 5. **Production switch:** `WEB_MODE=switch` with GPIO22.
 
@@ -144,8 +146,8 @@ BLE and Wi-Fi can run together on the CYW43439, but they share airtime and RAM. 
 
 ## Verification (when implementing)
 1. Phase 1: on the same bench replay ([rp2350-feasibility.md](rp2350-feasibility.md)), core 1's worst case per IMU tick matches the `copy_to_ram` build within noise, and `app.dis` shows no flash calls from the hot path.
-2. Phase 2: the Pico joins `MyWiFi` and prints its IP on USB. A PC or phone on the same network opens `http://<ip>/` (and `gnss-smart.local` where it resolves) and sees values update at 1 Hz. The IMU and GNSS ring-overflow counters stay at 0 while the page polls and while Wi-Fi joins or re-joins (power-cycle the router to test that). Core 1 worst case unchanged with a browser polling.
-3. Phase 3: with `MyWiFi` off, the Pico falls back to the AP. A phone joins `gnss_smart` without a password, gets a 192.168.4.x address and opens 192.168.4.1.
+2. Phase 2: the Pico joins `MyWiFi` and prints its IP on USB. A PC or phone on the same network opens `http://<ip>/` (and `opengins.local` where it resolves) and sees values update at 1 Hz. The IMU and GNSS ring-overflow counters stay at 0 while the page polls and while Wi-Fi joins or re-joins (power-cycle the router to test that). Core 1 worst case unchanged with a browser polling.
+3. Phase 3: with `MyWiFi` off, the Pico falls back to the AP. A phone joins `OpenGINS` without a password, gets a 192.168.4.x address and opens 192.168.4.1.
 4. Phase 4: save a config, power-cycle, check it's restored. Cut power during a save, check the previous config survives. Change a lever arm live: output pauses with the status flag set, the filter re-aligns and output resumes without a reboot.
 5. Phase 5: with `WEB_MODE=switch`, boot with GPIO22 high: Wi-Fi never starts (no SSID visible, current draw unchanged). Boot with it low: Wi-Fi comes up as in Phase 2 or 3.
-   - Done 2026-11-13 (bare Pico 2 W, GPIO22 open): the log shows `web-mode switch (GP22) open: Wi-Fi off` and `WIFI  off`; the Pico doesn't answer ping at its old address, and a scan from dietpi finds no `gnss_smart`. With a jumper from GPIO22 (pin 29) to GND (pin 28): `web-mode switch (GP22) to GND: Wi-Fi on`, init 861 ms, joined `MyWiFi` (−70 to −80 dBm in that board position), `/`, `/config.html`, `/status.json` and `/config.json` all 200, 20 of 20 polls OK. Not yet done: the current draw with Wi-Fi off and on.
+   - Done 2026-11-13 (bare Pico 2 W, GPIO22 open): the log shows `web-mode switch (GP22) open: Wi-Fi off` and `WIFI  off`; the Pico doesn't answer ping at its old address, and a scan from dietpi finds no `OpenGINS`. With a jumper from GPIO22 (pin 29) to GND (pin 28): `web-mode switch (GP22) to GND: Wi-Fi on`, init 861 ms, joined `MyWiFi` (−70 to −80 dBm in that board position), `/`, `/config.html`, `/status.json` and `/config.json` all 200, 20 of 20 polls OK. Not yet done: the current draw with Wi-Fi off and on.
