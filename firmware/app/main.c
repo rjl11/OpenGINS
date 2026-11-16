@@ -29,6 +29,8 @@
 #include "ground_point.h"
 #include "imu_calib.h"
 #include "nav_core1.h"
+#include "nav_suite.h"
+#include "paogi.h"
 #include "pole_mount.h"
 #include "settings.h"
 #include "tm210.h"
@@ -611,7 +613,8 @@ typedef struct {
     const char *fix;       /* the receiver's fix type when source is gnss */
     double      lat_deg, lon_deg, h_ell_m;
     /* Tractor / pole with ant_height_m above 0: lat/lon/h above are the
-     * ground point below the antenna, the antenna itself is here. */
+     * ground point below the antenna. The antenna itself is in ant_*
+     * whenever source is not none, with or without a ground point. */
     bool        ground;
     float       ant_height_m;
     bool        tilted;    /* the ground point used the attitude (gate passed) */
@@ -650,8 +653,26 @@ static void best_position(const nav_output_t *o, uint64_t now, best_pos_t *b)
      * uncertainty to check, and a wrong yaw would throw a leaning pole's
      * tip the wrong way. */
     float h_ant = settings_ant_height(&s_settings, settings_platform(&s_boot_settings));
-    if (b->source[0] == 'n' || !(h_ant > 0.0f)) return;
+    if (b->source[0] == 'n') return;
     bool ins = b->source[0] == 'i';
+    if (!(h_ant > 0.0f)) {
+        /* No ground point: lat/lon/h stay the output, and ant_* is the
+         * antenna ($PAOGI sends the antenna): the filter's IMU point moved
+         * by the lever arm, or the receiver's fix. */
+        double in[3] = { b->lat_deg / DEG, b->lon_deg / DEG, b->h_ell_m }, ant[3];
+        if (ins) {
+            double rpy[3] = { o->rpy_rad[0], o->rpy_rad[1], o->rpy_rad[2] };
+            ground_point(in, o->rpy_valid ? rpy : NULL, s_settings.leverarm_m, ant);
+            b->ant_lat_deg = ant[0] * DEG;
+            b->ant_lon_deg = ant[1] * DEG;
+            b->ant_h_ell_m = ant[2];
+        } else {
+            b->ant_lat_deg = b->lat_deg;
+            b->ant_lon_deg = b->lon_deg;
+            b->ant_h_ell_m = b->h_ell_m;
+        }
+        return;
+    }
     /* The pole axis in the body frame (pole_mount.h): the body down axis
      * unless a learned one is in use. */
     float u[3];
@@ -697,6 +718,164 @@ static void best_position(const nav_output_t *o, uint64_t now, best_pos_t *b)
     b->lat_deg = gp[0] * DEG;
     b->lon_deg = gp[1] * DEG;
     b->h_ell_m = gp[2];
+}
+
+/* $PAOGI on the USB port at 10 Hz on the tractor platform (paogi.h,
+ * plans/ethernet-w5500-agopenweb.md for the field rules). Sent when core 1
+ * publishes, or on its own 100 ms timer while core 1 doesn't, so the
+ * receiver-only fallback keeps the rate. */
+#define PAOGI_PERIOD_US    100000u
+#define PAOGI_FALLBACK_US  150000u  /* no publish for this long: the timer sends */
+#define PAOGI_DR_AFTER_US  1000000u /* INS with no fresh GNSS epoch: quality 6 */
+#define DAY_MS             86400000LL
+
+static bool     s_paogi_on;     /* tractor platform in effect since boot */
+static double   s_paogi_gyr[3]; /* corrected gyro summed since the last sentence */
+static uint32_t s_paogi_gyr_n;
+
+static void paogi_gyro(const float g[3])
+{
+    if (!s_paogi_on) return;
+    for (int i = 0; i < 3; i++) s_paogi_gyr[i] += g[i];
+    s_paogi_gyr_n++;
+}
+
+/* The receiver's position type on the GGA quality scale. PPP counts as a
+ * single fix: its accuracy while converging is not known from the type. */
+static int gga_quality(uint32_t pos_type)
+{
+    switch (pos_type) {
+    case UM980_TYPE_NONE:           return 0;
+    case UM980_TYPE_PSRDIFF:
+    case UM980_TYPE_SBAS:           return 2;
+    case UM980_TYPE_L1_FLOAT:
+    case UM980_TYPE_IONOFREE_FLOAT:
+    case UM980_TYPE_NARROW_FLOAT:   return 5;
+    case UM980_TYPE_L1_INT:
+    case UM980_TYPE_WIDE_INT:
+    case UM980_TYPE_NARROW_INT:     return 4;
+    default:                        return 1;
+    }
+}
+
+static void paogi_send(const nav_output_t *o, uint64_t now)
+{
+    best_pos_t bp;
+    best_position(o, now, &bp);
+    bool ins = bp.source[0] == 'i';
+    bool gnss_fresh = s_have_nav && s_last_nav.pos_usable && age_us(now, s_last_nav.t_valid_us) < PAOGI_DR_AFTER_US;
+
+    paogi_fix_t f;
+    memset(&f, 0, sizeof f);
+    f.sats = -1;
+    f.hdop = -1.0f;
+    f.age_s = -1.0f;
+
+    /* UTC from the last epoch's GPS time, moved on to the filter output's
+     * time when that is the source. Integer milliseconds: a float time of
+     * week is too coarse late in the week. */
+    if (s_have_nav) {
+        int64_t ms = (int64_t)s_last_nav.tow_ms - (int64_t)s_last_nav.leap_s * 1000;
+        if (ins) ms += ((int64_t)o->t_us - (int64_t)s_last_nav.t_valid_us) / 1000;
+        f.time_valid = true;
+        f.utc_ms = (uint32_t)(((ms % DAY_MS) + DAY_MS) % DAY_MS);
+        f.sats = s_last_nav.n_used;
+    }
+    const um980_stats_t *gs = um980_stats(&s_gnss);
+    if (gs->dop_valid) f.hdop = gs->hdop;
+    if (gnss_fresh && s_last_nav.diff_age_s > 0.0f) f.age_s = s_last_nav.diff_age_s;
+
+    /* The antenna, not the ground point: AgOpenGPS corrects for the
+     * antenna height itself. */
+    if (bp.source[0] != 'n') {
+        f.pos_valid = true;
+        f.lat_deg = bp.ant_lat_deg;
+        f.lon_deg = bp.ant_lon_deg;
+        f.alt_msl_m = bp.ant_h_ell_m - (s_have_undulation ? (double)s_undulation_m : 0.0);
+        if (!ins) {
+            f.quality = gga_quality(s_last_nav.pos_type);
+        } else {
+            f.quality = gnss_fresh ? gga_quality(s_last_nav.pos_type) : 6;
+        }
+    }
+
+    if (ins && o->vel_valid) {
+        f.speed_valid = true;
+        f.speed_mps = hypotf(o->vel_ned[0], o->vel_ned[1]);
+    } else if (!ins && s_have_nav && s_last_nav.vel_usable && age_us(now, s_last_nav.t_valid_us) < POS_GNSS_FRESH_US) {
+        f.speed_valid = true;
+        f.speed_mps = (float)s_last_nav.hor_speed_mps;
+    }
+
+    /* Roll and pitch from the filter's best attitude source while it runs
+     * on a live IMU; the heading only from the INS while it navigates (a
+     * magnetometer yaw is no steering heading). */
+    bool out_live = o->t_us != 0 && age_us(now, o->t_us) < POS_OUT_FRESH_US && o->imu_age_ms >= 0 &&
+                    o->imu_age_ms < POS_IMU_FRESH_MS;
+    double roll = 0.0, pitch = 0.0;
+    if (out_live && o->rpy_valid) {
+        roll = o->rpy_rad[0];
+        pitch = o->rpy_rad[1];
+        f.att_valid = true;
+        f.roll_deg = (float)(roll * DEG);
+        f.pitch_deg = (float)(pitch * DEG);
+        if (ins && o->att_source == NAV_ATT_INS &&
+            (o->mode == NAV_SUITE_MODE_FULL || o->mode == NAV_SUITE_MODE_COASTING)) {
+            f.heading_valid = true;
+            f.heading_deg = (float)(o->rpy_rad[2] * DEG);
+        }
+    }
+
+    /* Yaw rate: the mean corrected gyro since the last sentence, less the
+     * filter's bias, turned into the rate of the NED yaw (clockwise). */
+    if (s_paogi_gyr_n > 0) {
+        double q = s_paogi_gyr[1] / s_paogi_gyr_n, r = s_paogi_gyr[2] / s_paogi_gyr_n;
+        if (o->bias_valid) {
+            q -= o->gyr_bias[1];
+            r -= o->gyr_bias[2];
+        }
+        double cp = cos(pitch);
+        if (fabs(cp) > 0.1) f.yaw_rate_dps = (float)((q * sin(roll) + r * cos(roll)) / cp * DEG);
+    }
+    s_paogi_gyr[0] = s_paogi_gyr[1] = s_paogi_gyr[2] = 0.0;
+    s_paogi_gyr_n = 0;
+
+    char line[PAOGI_MAX];
+    if (paogi_format(&f, line, sizeof line) > 0) printf("%s", line);
+}
+
+/* Called every pass: decides whether a sentence is due. */
+static bool paogi_poll(uint64_t now)
+{
+    static bool     s_init;
+    static uint32_t s_seq;
+    static uint64_t s_last_pub_us, s_next_us;
+    uint32_t seq = nav_output_seq();
+    bool published = seq != s_seq;
+    if (!s_init) {
+        s_init = true;
+        s_seq = seq;
+        s_last_pub_us = now;
+        s_next_us = now + PAOGI_PERIOD_US;
+        return false;
+    }
+    if (published) {
+        s_seq = seq;
+        s_last_pub_us = now;
+    }
+    bool due;
+    if (now - s_last_pub_us < PAOGI_FALLBACK_US) {
+        due = published;
+    } else {
+        due = now >= s_next_us;
+    }
+    if (!due) return false;
+    s_next_us = now + PAOGI_PERIOD_US;
+    if (usb_log_on() || !paogi_enabled()) return false;
+    nav_output_t o;
+    nav_get_output(&o);
+    paogi_send(&o, now);
+    return true;
 }
 
 /* Survey-pole aiding (pole_aid.h): one or two lines, nothing when off. */
@@ -1743,6 +1922,11 @@ int main(void)
                    settings_platform(&s_settings) == APP_PLATFORM_FIXED_WING
                ? (dual_set ? "no, dual-antenna heading" : "yes, single antenna")
                : "no, not on this platform");
+    /* The platform in effect since boot, as for the other platform choices. */
+    s_paogi_on = settings_platform(&s_boot_settings) == APP_PLATFORM_TRACTOR;
+    if (s_paogi_on) {
+        printf("$PAOGI on USB at 10 Hz (USB command 'paogi off' stops it)\n");
+    }
 
     const um980_config_t gnss_cfg = {
         .pps_pin = PIN_UM980_PPS, .dual_antenna = dual_set, .verbose = true,
@@ -1789,6 +1973,7 @@ int main(void)
             nav_push_imu(&n);
             field_io_imu(&n);
             usb_log_imu(&n, is.gap);
+            paogi_gyro(n.gyr);
             noise_push(&is);
             s_last_imu = is;
             worked = true;
@@ -1879,6 +2064,9 @@ int main(void)
             }
         }
         worked |= usb_log_poll(now);
+        if (s_paogi_on) {
+            worked |= paogi_poll(now);
+        }
 
         /* Survey pole: episode records for the pole-axis fit. */
         {

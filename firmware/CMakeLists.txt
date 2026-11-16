@@ -49,6 +49,7 @@ add_executable(app
     app/pole_mount.c
     app/pole_mount_fit.c
     app/usb_log.c
+    app/paogi.c
 )
 
 target_include_directories(app PRIVATE app)

@@ -1,10 +1,12 @@
 # OpenGINS
 
+[![build](https://github.com/rjl11/OpenGINS/actions/workflows/build.yml/badge.svg)](https://github.com/rjl11/OpenGINS/actions/workflows/build.yml)
+
 **Open GNSS and Inertial Navigation System.**
 
 OpenGINS is GNSS and IMU fusion firmware for a navigation unit meant to be universal: an agricultural unit for a tractor (AgOpenGPS / AgOpenWeb), a GNSS survey pole, and a UAV. The design is one board and one filter for all three; the platform setting picks how the sensors are used.
 
-The unit combines a Unicore UM980 / UM982 GNSS receiver, a TM210 IMU, a BMP581 barometer and optional wheel or optical-flow speed in the [INSLIB](https://github.com/jnz/INSLIB) `nav_suite` filter. It runs on a Raspberry Pi Pico 2 W (RP2350) in bare metal. The filter runs on core 1; core 0 handles the sensor UARTs, Bluetooth and the Wi-Fi configuration page.
+The unit combines a Unicore UM980 / UM982 GNSS receiver, a TM210 / TM171 IMU, a BMP581 barometer and optional wheel and / or optical-flow speed in the [INSLIB](https://github.com/jnz/INSLIB) `nav_suite` filter. It runs on a Raspberry Pi Pico 2 W (RP2350) in bare metal. The filter runs on core 1; core 0 handles the sensor UARTs, Bluetooth and the Wi-Fi configuration page.
 
 The firmware also reports the height above sea level (RH 2000) next to the ellipsoid height, using Lantmäteriet's SWEN17_RH2000 geoid model cut to an area around the RTK base. See [Geoid heights](#geoid-heights).
 
@@ -67,9 +69,31 @@ The output is `firmware/build/app.uf2`; copy it to the BOOTSEL drive. [BUILDING.
 - **Status.** `/status.json` gives the live state of the sensors, the filter and the receiver. The ellipsoid height comes with `h_geoid_m` (RH 2000 height) and `geoid_model` (which geoid was used).
 - **Field logs.** Send `log on` on the USB port to record every sensor, the filter output and the flow link as binary records. Decode them with `firmware/tools/field_log.py`.
 
+### Web pages
+
+Screenshots from a unit on a survey pole with an RTK fix.
+| Start page (phone view) | Configuration |
+|---|---|
+| <img src="docs/screenshots/web-index.png" width="300" alt="Start page: GNSS fix, filter mode, position and sensor tiles"> | <img src="docs/screenshots/web-config.png" width="500" alt="Configuration page: antenna position, platform, sensors, optical flow, filter tuning, Wi-Fi"> |
+
+| Details (`/status.json`) | IMU calibration |
+|---|---|
+| <img src="docs/screenshots/web-status.png" width="400" alt="Details page: every status field of the sensors, filter and position"> | <img src="docs/screenshots/web-calib.png" width="500" alt="Calibration page: gyro bias, accelerometer, magnetometer, gyro matrix and pole axis"> |
+
+## AgOpenGPS
+
+With the platform set to tractor (`-DPLATFORM=tractor`, or on the web config page followed by a reboot), the Pico sends `$PAOGI` sentences on its USB serial port at 10 Hz. Point AgIO (AgOpenGPS) at the Pico's COM port as the GPS source. The USB port also carries the status report as text lines; readers skip lines that don't start with `$`.
+
+- **Position:** the GNSS antenna position, not the ground point, even when an antenna height is set. AgOpenGPS applies its own antenna-height and roll compensation, so a point that had already been moved would be corrected twice. The filter's position is moved from the IMU to the antenna by the lever arm.
+- **Fields:** the fix quality is the receiver's (4 RTK fixed, 5 float, 2 DGPS, 1 single), or 6 when the filter has had no fresh GNSS fix for 1 s. The heading is the INS heading and stays empty until the filter navigates; roll and pitch come from the filter's attitude. The altitude is above mean sea level.
+- **On and off:** send `paogi off` on the USB port to stop the sentences and `paogi on` to start them again. They pause while the field log (`log on`) runs.
+- **Heading source:** in AgOpenGPS / AgOpenWeb, set the heading source to dual with a heading offset of 0, because `$PAOGI` counts as a dual-antenna sentence and its heading is already the vehicle heading.
+
+The sentence's fields are described in [plans/ethernet-w5500-agopenweb.md](plans/ethernet-w5500-agopenweb.md).
+
 ## Geoid heights
 
-The filter's height is an ellipsoid height. To get a height above sea level, the firmware subtracts the geoid height N from it. The geoid model is Lantmäteriet's SWEN17_RH2000 (open data, CC0), which converts a SWEREF 99 ellipsoid height to an RH 2000 height. The whole grid is too large for flash, so `firmware/tools/geoid_cut.py` cuts a 100 km area around the RTK base (58N 12E) into `firmware/app/geoid_grid.c` (182 × 172 values, about 61 KB of int16 data), and `firmware/app/geoid.c` interpolates it bilinearly.
+The filter's height is an ellipsoid height. To get a height above sea level, the firmware subtracts the geoid height N from it. The geoid model in Sweden is Lantmäteriet's SWEN17_RH2000 (open data, CC0), which converts a SWEREF 99 ellipsoid height to an RH 2000 height. The whole grid is too large for flash, so `firmware/tools/geoid_cut.py` cuts a 100 km area around the RTK base (58N 12E) into `firmware/app/geoid_grid.c` (182 × 172 values, about 61 KB of int16 data), and `firmware/app/geoid.c` interpolates it bilinearly.
 
 - The result is an RH 2000 height only when the position is in SWEREF 99, which is the case for RTK from a base given in SWEREF 99. A standalone fix (WGS84 / ITRF) is a few decimetres off.
 - Outside the cut, the firmware uses the receiver's own undulation instead, and `geoid_model` says so.

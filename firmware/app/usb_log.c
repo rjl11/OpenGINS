@@ -10,6 +10,7 @@
 #include "tusb.h"
 
 #include "flow_link.h"
+#include "paogi.h"
 
 #define RING_BITS        15 /* 32 KB: about 0.6 s of the full stream */
 #define RING_SIZE        (1u << RING_BITS)
@@ -194,8 +195,12 @@ static void command(const char *c)
         log_set(true);
     } else if (strcmp(c, "log off") == 0) {
         log_set(false);
+    } else if (strcmp(c, "paogi on") == 0 || strcmp(c, "paogi off") == 0) {
+        /* $PAOGI on the tractor platform (paogi.h, main.c). */
+        paogi_set_enabled(c[7] == 'n');
+        printf("[paogi] %s\n", paogi_enabled() ? "on (sent on the tractor platform only)" : "off");
     } else if (c[0] != '\0') {
-        printf("[log] unknown command '%s' (log on | log off)\n", c);
+        printf("[log] unknown command '%s' (log on | log off | paogi on | paogi off)\n", c);
     }
 }
 

@@ -67,6 +67,10 @@ python firmware/tools/check_ram_path.py firmware/build/app.dis
 
 It must report nothing in flash that is reachable from core 1 or the ISRs. If code on core 1 starts calling a new SDK or libc function, add the file that holds it to `firmware/link/default_text_excludes.incl`.
 
+### Continuous integration
+
+`.github/workflows/build.yml` runs on every push to `main`, on pull requests and by hand. It builds the firmware in a Debian 13 container (`arm-none-eabi-gcc` 14.2, Pico SDK 2.3.1) in four configurations (`pole`; `tractor` with `dual`; `multirotor` with `WEB_MODE=switch`; `WEB_MODE=off`) and runs `check_ram_path.py` on each. It also runs the host tests below. Each configuration's `app.uf2` and `app.elf` can be downloaded from the run's artifacts.
+
 ### Build hosts with little RAM
 
 On a board with under 1 GB of RAM (a Raspberry Pi Zero 2 W, for example), build with one job and add a swap file of about 2 GB. The SDK builds `pioasm` and `picotool` as nested CMake projects that ignore Ninja's `-j1` but follow `CMAKE_BUILD_PARALLEL_LEVEL`:
@@ -123,7 +127,7 @@ python firmware/tools/field_log.py --help
 
 ## Host tests
 
-The calibration, pole, speed, ground-point, geoid and flow-link code is plain C that also builds on a PC. Each test exits with 0 when all checks pass. From the repo root (`temp/` is git-ignored):
+The calibration, pole, speed, ground-point, `$PAOGI`, geoid and flow-link code is plain C that also builds on a PC. Each test exits with 0 when all checks pass. From the repo root (`temp/` is git-ignored):
 
 ```bash
 mkdir -p temp
@@ -134,6 +138,7 @@ gcc -O2 -Wall -Wextra -I firmware/app firmware/tools/test_imu_calib_rot.c firmwa
 gcc -O2 -Wall -Wextra -I firmware/app firmware/tools/test_pole_aid.c firmware/app/pole_aid.c -lm -o temp/test_pole_aid && temp/test_pole_aid
 gcc -O2 -Wall -Wextra -I firmware/app firmware/tools/test_pole_mount.c firmware/app/pole_aid.c firmware/app/pole_mount_fit.c firmware/app/imu_calib_lsq.c -lm -o temp/test_pole_mount && temp/test_pole_mount
 gcc -O2 -Wall -Wextra -I firmware/app firmware/tools/test_ground_point.c firmware/app/ground_point.c -lm -o temp/test_ground_point && temp/test_ground_point
+gcc -O2 -Wall -Wextra -I firmware/app firmware/tools/test_paogi.c firmware/app/paogi.c -lm -o temp/test_paogi && temp/test_paogi
 gcc -O2 -Wall -Wextra -I firmware/app -I firmware/drivers/flow_io -I common firmware/app/flow_nav.c firmware/tools/test_flow_nav.c -lm -o temp/test_flow_nav && temp/test_flow_nav
 gcc -O2 -Wall -Wextra -I common firmware/tools/test_flow_link.c -o temp/test_flow_link && temp/test_flow_link
 gcc -O2 -Wall -Wextra -I firmware/app firmware/tools/test_geoid.c firmware/app/geoid.c firmware/app/geoid_grid.c -lm -o temp/test_geoid && temp/test_geoid geoid/SWEN17_RH2000.txt

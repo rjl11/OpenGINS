@@ -1,6 +1,8 @@
 # Ethernet output with a W5500, compatible with AgOpenWeb
 
 > **Status: on hold** (2026-11-06). This is not part of the current build. The plan is kept for when wired Ethernet / AgOpenWeb output is added, and SPI0 (GP16–21) stays reserved for it.
+>
+> **The sentence is already sent on USB** (2026-11-16): on the tractor platform, `firmware/app/paogi.c` formats `$PAOGI` as described below and `main.c` sends it on the USB serial port at 10 Hz, between the status report's text lines (readers skip lines that don't start with `$`). The USB command `paogi off` stops it, `paogi on` starts it again, and the USB log mode (`log on`) holds it. The Ethernet channel will reuse the same formatter. Choices made there: PPP counts as quality 1; roll and pitch are sent whenever the filter has an attitude on a live IMU (also from the AHRS while the INS is not navigating), the heading only from the INS in FULL or COASTING; the yaw rate is the mean bias-corrected gyro over the 100 ms, turned into the NED yaw rate. Host test: `firmware/tools/test_paogi.c`.
 
 ## Context
 Add a WIZnet W5500 Ethernet module on SPI so the device sends its position over wired UDP to [AgOpenWeb](https://github.com/AgOpenGPS-Official/AgOpenWeb) (and AgOpenGPS/AgIO) on the tractor network. BLE output stays as it is. Ethernet is an extra channel, not a replacement.

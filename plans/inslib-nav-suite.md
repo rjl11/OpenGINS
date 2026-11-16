@@ -69,7 +69,7 @@ User decision 2026-11-13: the TM210 magnetometer is used from boot, before any o
 - **Still to do:** the on-vehicle calibration with `inslib_mag_calib.py` for `mag_misalignment` / `mag_fixed_bias` ([imu-tm210.md](imu-tm210.md), step 4), and field logs of how often the gate rejects samples on a running tractor. The CPU cost of 18 instead of 15 states is not yet measured (the cycle-count bench in [rp2350-feasibility.md](rp2350-feasibility.md)).
 
 ## Outputs (10 Hz)
-`$PAOGI` is the AgOpenWeb sentence sent over Ethernet, which is on hold ([ethernet-w5500-agopenweb.md](ethernet-w5500-agopenweb.md)). For now, BLE NMEA is the only output.
+`$PAOGI` is the AgOpenWeb / AgOpenGPS sentence ([ethernet-w5500-agopenweb.md](ethernet-w5500-agopenweb.md)). Its Ethernet channel is on hold, but on the tractor platform the firmware already sends it on the USB port at 10 Hz (`firmware/app/paogi.c`), so a PC running AgIO can take it from the Pico's COM port. BLE NMEA to SW Maps is the other planned output.
 
 | Output | INSLIB call | Used by |
 |---|---|---|

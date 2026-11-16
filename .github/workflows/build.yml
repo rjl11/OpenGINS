@@ -1,0 +1,107 @@
+# Builds the Pico firmware in a few configurations, checks that the core 1
+# path and the ISRs stay in SRAM, and runs the host tests (BUILDING.md).
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  PICO_SDK_VERSION: "2.3.1"
+
+jobs:
+  firmware:
+    name: firmware (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    # Debian 13: arm-none-eabi-gcc 14.2, the compiler the firmware is tested with.
+    container: debian:trixie
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: pole
+            args: ""
+          - name: tractor-dual
+            args: "-DPLATFORM=tractor -DGNSS_ANTENNA_MODE=dual"
+          - name: multirotor-web-switch
+            args: "-DPLATFORM=multirotor -DWEB_MODE=switch"
+          - name: no-wifi
+            args: "-DWEB_MODE=off"
+    steps:
+      - name: Install toolchain
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            git ca-certificates cmake ninja-build build-essential python3 \
+            gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib \
+            pkg-config libusb-1.0-0-dev
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache Pico SDK and picotool
+        id: sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /opt/pico-sdk
+            /opt/picotool
+          key: pico-sdk-${{ env.PICO_SDK_VERSION }}-trixie
+
+      - name: Get Pico SDK and build picotool
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$PICO_SDK_VERSION" https://github.com/raspberrypi/pico-sdk.git /opt/pico-sdk
+          git -C /opt/pico-sdk submodule update --init --depth 1
+          git clone --depth 1 --branch "$PICO_SDK_VERSION" https://github.com/raspberrypi/picotool.git /tmp/picotool-src
+          cmake -S /tmp/picotool-src -B /tmp/picotool-build -G Ninja \
+            -DPICO_SDK_PATH=/opt/pico-sdk -DCMAKE_INSTALL_PREFIX=/opt/picotool -DPICOTOOL_FLAT_INSTALL=1
+          ninja -C /tmp/picotool-build install
+
+      - name: Configure
+        run: |
+          cmake -S firmware -B firmware/build -G Ninja \
+            -DPICO_SDK_PATH=/opt/pico-sdk -Dpicotool_DIR=/opt/picotool/picotool \
+            ${{ matrix.args }}
+
+      - name: Build
+        run: ninja -C firmware/build
+
+      - name: Check that core 1 and the ISRs run from SRAM
+        run: python3 firmware/tools/check_ram_path.py firmware/build/app.dis
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.name }}
+          path: |
+            firmware/build/app.uf2
+            firmware/build/app.elf
+          if-no-files-found: error
+
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run host tests
+        run: |
+          set -e
+          mkdir -p temp
+          CC="gcc -O2 -Wall -Wextra"
+          $CC -I firmware/app firmware/tools/test_imu_calib_fit.c firmware/app/imu_calib_fit.c -lm -o temp/test_imu_calib_fit && temp/test_imu_calib_fit
+          $CC -I firmware/app firmware/tools/test_imu_calib_acc.c firmware/app/imu_calib_acc.c firmware/app/imu_calib_lsq.c -lm -o temp/test_imu_calib_acc && temp/test_imu_calib_acc
+          $CC -I firmware/app firmware/tools/test_imu_calib_mag.c firmware/app/imu_calib_mag.c firmware/app/imu_calib_lsq.c -lm -o temp/test_imu_calib_mag && temp/test_imu_calib_mag
+          $CC -I firmware/app firmware/tools/test_imu_calib_rot.c firmware/app/imu_calib_rot.c firmware/app/imu_calib_lsq.c -lm -o temp/test_imu_calib_rot && temp/test_imu_calib_rot
+          $CC -I firmware/app firmware/tools/test_pole_aid.c firmware/app/pole_aid.c -lm -o temp/test_pole_aid && temp/test_pole_aid
+          $CC -I firmware/app firmware/tools/test_pole_mount.c firmware/app/pole_aid.c firmware/app/pole_mount_fit.c firmware/app/imu_calib_lsq.c -lm -o temp/test_pole_mount && temp/test_pole_mount
+          $CC -I firmware/app firmware/tools/test_ground_point.c firmware/app/ground_point.c -lm -o temp/test_ground_point && temp/test_ground_point
+          $CC -I firmware/app firmware/tools/test_paogi.c firmware/app/paogi.c -lm -o temp/test_paogi && temp/test_paogi
+          $CC -I firmware/app -I firmware/drivers/flow_io -I common firmware/app/flow_nav.c firmware/tools/test_flow_nav.c -lm -o temp/test_flow_nav && temp/test_flow_nav
+          $CC -I common firmware/tools/test_flow_link.c -o temp/test_flow_link && temp/test_flow_link
+          $CC -I firmware/app firmware/tools/test_geoid.c firmware/app/geoid.c firmware/app/geoid_grid.c -lm -o temp/test_geoid && temp/test_geoid geoid/SWEN17_RH2000.txt
+
+      - name: Flow link test (Python side)
+        run: python3 pi/flow/python/test_flow_link.py
