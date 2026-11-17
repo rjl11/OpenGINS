@@ -298,6 +298,42 @@
  * scales with 1 / length (datasheet: 0.1 deg RMS at 1 m). */
 #define APP_HEADING_SD_FLOOR_DEG_1M 0.1f
 
+/* Floors on the GNSS 1-sigma INSLIB fuses with. Left at 0, INSLIB assumes
+ * a single-frequency standalone receiver (0.5 / 1.0 m, 0.3 / 0.5 m/s) and
+ * throws an RTK fix's precision away. These are the INSLIB options
+ * (gnss_*_stddev_floor_*), sized for RTK fixed as the INSLIB manual
+ * suggests. Estimates, not yet measured on the UM980. */
+#define APP_GNSS_FLOOR_POS_HOR_M    0.02f
+#define APP_GNSS_FLOOR_POS_VER_M    0.03f
+#define APP_GNSS_FLOOR_VEL_HOR_MPS  0.03f
+#define APP_GNSS_FLOOR_VEL_VER_MPS  0.05f
+
+/* Position floors per fix type, applied in main.c before a fix goes to
+ * core 1, so a receiver that drops out of RTK fixed but still reports
+ * fixed-grade sigmas is not believed. RTK fixed uses only the INSLIB
+ * floors above. Estimates, not yet measured on the UM980. */
+#define APP_GNSS_FLOOR_FLOAT_HOR_M  0.25f /* RTK float                    */
+#define APP_GNSS_FLOOR_FLOAT_VER_M  0.40f
+#define APP_GNSS_FLOOR_DGPS_HOR_M   0.50f /* DGPS, SBAS                   */
+#define APP_GNSS_FLOOR_DGPS_VER_M   1.00f
+#define APP_GNSS_FLOOR_SINGLE_HOR_M 1.00f /* single, PPP converging, other */
+#define APP_GNSS_FLOOR_SINGLE_VER_M 1.50f
+
+/* While the INS keeps the GNSS height (web setting height_src; auto = the
+ * survey pole): INSLIB's offset filter (local_gnss_alt), which learns the
+ * barometer's offset to the ellipsoid while GNSS is up and gives the
+ * absolute height as baro_alt + offset during an outage. With the RTK
+ * height in the INS (baro_height_disable), the handover step at an outage
+ * is the offset's error. INSLIB's defaults (10 s, 3x) are sized
+ * for a barometric INS height; these fuse the pairs faster and trust them
+ * more. The random walk stays at INSLIB's 0.3 m/sqrt(s): too low turns real
+ * drift into outliers. 0 = INSLIB's default. Defaults of the web settings
+ * under "Filter tuning" (settings_t.offset_*). Start values, to tune from
+ * a field log with an RTK dropout. */
+#define APP_HEIGHT_OFFSET_INTERVAL_S  1.0f /* min_update_interval_sec */
+#define APP_HEIGHT_OFFSET_INFLATION   1.5f /* stddev_inflation_factor */
+#define APP_HEIGHT_OFFSET_RW_MPS      0.0f /* rw_stddev_mps          */
+
 /* A barometer sample older than this when it reaches the filter is dropped
  * (start value, not yet measured). */
 #define APP_BARO_MAX_AGE_US         100000

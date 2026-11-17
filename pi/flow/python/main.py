@@ -9,36 +9,13 @@ Protocol: common/flow_link.h. Design: plans/optical-flow-aiding.md.
 """
 
 import argparse
-import statistics
 import sys
 import time
-from collections import deque
 from pathlib import Path
 
 import flow_link as fl
+from interval_watch import IntervalWatch
 from flow_lk import FlowEstimator, Intrinsics
-
-
-class IntervalWatch:
-    """Classifies the interval between two frames against the recent normal
-    one: normal, the Pico's left-out trigger (about 2x, FLOW_F_AFTER_GAP), or
-    a frame lost on the Pi (anything longer, FLOW_F_DROPPED)."""
-
-    def __init__(self, n=32):
-        self.recent = deque(maxlen=n)
-
-    def classify(self, dt_ns: int) -> int:
-        nominal = statistics.median(self.recent) if len(self.recent) >= 8 else None
-        flags = 0
-        if nominal:
-            r = dt_ns / nominal
-            if 1.5 < r < 2.5:
-                flags = fl.F_AFTER_GAP
-            elif r >= 2.5:
-                flags = fl.F_DROPPED
-        if flags == 0:
-            self.recent.append(dt_ns)
-        return flags
 
 
 def frames_from_dir(d: Path, fps: float):

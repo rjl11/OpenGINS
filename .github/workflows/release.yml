@@ -1,7 +1,8 @@
 # A version tag (v*) builds the firmware with build.yml (all configurations,
 # the SRAM check and the host tests) and publishes a GitHub release with one
-# .uf2 per configuration. Only the two newest releases are kept; older ones
-# are deleted, but their tags stay.
+# .uf2: the tractor build (single antenna, other options at their defaults)
+# for AgOpenGPS / AgOpenWeb, named opengins-<tag>-AOG.uf2. Only the two
+# newest releases are kept; older ones are deleted, but their tags stay.
 name: release
 
 on:
@@ -29,16 +30,13 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: firmware-*
+          name: firmware-tractor
           path: artifacts
 
-      - name: Name the .uf2 files after the tag and configuration
+      - name: Name the .uf2 after the tag
         run: |
           mkdir -p release
-          for dir in artifacts/firmware-*; do
-            config="${dir#artifacts/firmware-}"
-            cp "$dir/app.uf2" "release/opengins-${TAG}-${config}.uf2"
-          done
+          cp artifacts/app.uf2 "release/opengins-${TAG}-AOG.uf2"
           ls -l release
 
       - name: Create the release

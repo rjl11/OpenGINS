@@ -153,11 +153,26 @@ typedef struct {
     bool  use_mag;               /* sensors fitted (settings.h): a change restarts */
     bool  use_baro;              /*   the filter, which picks its vertical channel at init */
     /* GNSS course over ground may count as the heading (INSLIB
-     * automotive_mode, single antenna only): true on a tractor or a fixed
-     * wing, false on a survey pole or a multirotor, where the direction of
-     * travel says nothing about where the body points. From the platform in
-     * effect since boot. */
+     * automotive_mode, single antenna only): true on a tractor only. False
+     * on a survey pole or a multirotor, where the direction of travel says
+     * nothing about where the body points, and on a fixed wing, whose
+     * course differs from its heading by the crab angle in a crosswind.
+     * From the platform in effect since boot. */
     bool  course_yaw;
+    /* INSLIB baro_height_disable: the INS fuses the full 3D GNSS position
+     * instead of taking its height from the barometer, where the RTK height
+     * is centimetres and the barometer only decimetres; baro_alt still runs
+     * as the height during an outage. Also selects the offset-filter tuning
+     * below. From the web setting height_src: auto = true on a survey pole
+     * (the platform in effect since boot). */
+    bool  baro_height_off;
+    /* INSLIB's offset filter (local_gnss_cfg), applied only while
+     * baro_height_off: min_update_interval_sec, stddev_inflation_factor and
+     * rw_stddev_mps; 0 = INSLIB's default. Web settings, defaults
+     * APP_HEIGHT_OFFSET_*. A change restarts the filter. */
+    float offset_interval_s;
+    float offset_inflation;
+    float offset_rw_mps;
     /* Survey pole with an antenna height (pole_aid.h): planted-tip
      * constraint, yaw fixes from sway, magnetometer trust gate. With the
      * tip lever arm (IMU to tip, body FRD: the lever arm plus the antenna

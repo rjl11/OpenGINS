@@ -12,7 +12,7 @@ The firmware also reports the height above sea level (RH 2000) next to the ellip
 
 ## Status
 
-Work in progress. The firmware builds, and its parts have been tested on the bench: sensor bring-up, the filter's output, the web page, and the wheel-speed pulse capture. The optical-flow path is written and tested with synthetic frames but has not yet run with a camera. The whole system has not yet been tested end to end in a vehicle. GitHub Actions builds the firmware in four configurations, checks that the core 1 path and the ISRs run from SRAM, and runs the host-side C tests in `firmware/tools/`. They cover the IMU calibration, the survey-pole aiding and mount fit, the ground point, the optical-flow speed and flow link, `$PAOGI` and the geoid code; [BUILDING.md](BUILDING.md) lists the commands. Open items are listed in [TODO.md](TODO.md).
+Work in progress. The firmware builds, and its parts have been tested on the bench: sensor bring-up, the filter's output, the web page, and the wheel-speed pulse capture. The optical-flow path is written and tested with synthetic frames but has not yet run with a camera. The whole system has not yet been tested end to end in a vehicle. GitHub Actions builds the firmware in five configurations, checks that the core 1 path and the ISRs run from SRAM, and runs the host-side C tests in `firmware/tools/`. They cover the IMU calibration, the survey-pole aiding and mount fit, the ground point, the optical-flow speed and flow link, `$PAOGI` and the geoid code; [BUILDING.md](BUILDING.md) lists the commands. Open items are listed in [TODO.md](TODO.md).
 
 ## Hardware
 
@@ -101,6 +101,11 @@ The filter's height is an ellipsoid height. To get a height above sea level, the
 - The result is an RH 2000 height only when the position is in SWEREF 99, which is the case for RTK from a base given in SWEREF 99. A standalone fix (WGS84 / ITRF) is a few decimetres off.
 - Outside the cut, the firmware uses the receiver's own undulation instead, and `geoid_model` says so.
 - Lantmäteriet gives an uncertainty of 8–10 mm over most of Sweden and 2–10 cm in the mountains, near Vättern, in coastal waters and further out at sea. See [geoid/README.md](geoid/README.md) for the file format and how to make the table for another base or radius.
+
+## Credits
+
+- **Jan Zwiener**, for [INSLIB](https://github.com/jnz/INSLIB), the navigation filter at the core of this firmware.
+- **The AgOpenGPS community**, for AgOpenGPS / AgOpenWeb, the `$PAOGI` sentence, and the ideas and testing behind steering a tractor with open GNSS hardware.
 
 ## Licence
 

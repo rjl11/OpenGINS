@@ -256,7 +256,7 @@ Code: `imu_calib_action()` and the per-group status in `firmware/app/imu_calib.c
 4. **Bad data:** steel nearby, a running engine, a dropped IMU: the gates reject it and no set is saved.
 
 ## Open decisions
-- **Platform setting:** decided 2026-11-15 (tractor, pole, multirotor, fixed-wing; cmake default with a web override, at reboot). It only gates the calibration so far. Whether it should also set INSLIB options such as `automotive_mode` is still open.
+- **Platform setting:** decided 2026-11-15 (tractor, pole, multirotor, fixed-wing; cmake default with a web override, at reboot). It gates the calibration and, since 2026-11-17, INSLIB's `automotive_mode`: on the tractor only (single antenna), not on a fixed wing, whose course differs from its heading in a crosswind. The calibration still takes the course as a heading on a fixed wing.
 - **Applying a learned set:** decided 2026-11-15: automatically at the next boot after the range checks, with a reset to clear it. Phase 5 adds a hold mode per group that waits for an accept instead.
 - **Bench calibration still required?** On the pole, the background fit may make the bench multi-pose run unnecessary. On the tractor and UAV it can't replace it.
 - **UAV magnetometer in flight:** needs a motor current or throttle input to compensate for. Not available today.

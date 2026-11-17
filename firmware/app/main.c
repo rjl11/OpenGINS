@@ -295,7 +295,20 @@ static void nav_params_from_settings(nav_params_t *p, const settings_t *s)
     /* The platform in effect since boot, not the saved one: it changes at a
      * reboot, so a save never restarts the filter for it. */
     unsigned plat = settings_platform(&s_boot_settings);
-    p->course_yaw = plat == APP_PLATFORM_TRACTOR || plat == APP_PLATFORM_FIXED_WING;
+    /* INSLIB's automotive_mode only on the tractor: it assumes the body
+     * points where it travels, which a fixed wing in a crosswind does not
+     * (crab angle). imu_calib still takes the course on a fixed wing. */
+    p->course_yaw = plat == APP_PLATFORM_TRACTOR;
+    /* The web setting height_src; auto = GNSS height on the pole. A change
+     * restarts the filter (INSLIB picks the height source at INS start). */
+    p->baro_height_off = settings_ins_gnss_height(s, plat);
+    /* Used only with the GNSS height; left at 0 otherwise, so editing them
+     * on a barometer setup doesn't restart the filter for nothing. */
+    if (p->baro_height_off) {
+        p->offset_interval_s = s->offset_interval_s;
+        p->offset_inflation = s->offset_inflation;
+        p->offset_rw_mps = s->offset_rw_mps;
+    }
     /* Pole aiding: the tip is the antenna height below the antenna, along
      * the pole axis (body down, or the learned axis, pole_mount.h). */
     float h_ant = settings_ant_height(s, plat);
@@ -328,6 +341,35 @@ static bool baro_start(void)
     return true;
 }
 
+/* Position sigma floors for the fix type (app_config.h); RTK fixed gets 0,
+ * leaving only INSLIB's own floor. */
+static void fix_sd_floor(uint32_t pos_type, float *hor_m, float *ver_m)
+{
+    switch (pos_type) {
+    case UM980_TYPE_L1_INT:
+    case UM980_TYPE_WIDE_INT:
+    case UM980_TYPE_NARROW_INT:
+        *hor_m = 0.0f;
+        *ver_m = 0.0f;
+        break;
+    case UM980_TYPE_L1_FLOAT:
+    case UM980_TYPE_IONOFREE_FLOAT:
+    case UM980_TYPE_NARROW_FLOAT:
+        *hor_m = APP_GNSS_FLOOR_FLOAT_HOR_M;
+        *ver_m = APP_GNSS_FLOOR_FLOAT_VER_M;
+        break;
+    case UM980_TYPE_PSRDIFF:
+    case UM980_TYPE_SBAS:
+        *hor_m = APP_GNSS_FLOOR_DGPS_HOR_M;
+        *ver_m = APP_GNSS_FLOOR_DGPS_VER_M;
+        break;
+    default:
+        *hor_m = APP_GNSS_FLOOR_SINGLE_HOR_M;
+        *ver_m = APP_GNSS_FLOOR_SINGLE_VER_M;
+        break;
+    }
+}
+
 static void forward_gnss(const um980_nav_t *n)
 {
     nav_gnss_t g = { 0 };
@@ -342,6 +384,16 @@ static void forward_gnss(const um980_nav_t *n)
     g.pos_sd_ned[0] = n->sd_lat_m;
     g.pos_sd_ned[1] = n->sd_lon_m;
     g.pos_sd_ned[2] = n->sd_hgt_m;
+    float floor_hor, floor_ver;
+    fix_sd_floor(n->pos_type, &floor_hor, &floor_ver);
+    for (int i = 0; i < 2; i++) {
+        if (g.pos_sd_ned[i] < floor_hor) {
+            g.pos_sd_ned[i] = floor_hor;
+        }
+    }
+    if (g.pos_sd_ned[2] < floor_ver) {
+        g.pos_sd_ned[2] = floor_ver;
+    }
     g.vel_ned[0] = (float)(n->hor_speed_mps * cos(track));
     g.vel_ned[1] = (float)(n->hor_speed_mps * sin(track));
     g.vel_ned[2] = (float)-n->vert_speed_mps;
@@ -1894,12 +1946,14 @@ int main(void)
     /* The antenna-mode setting: build default, or the web page's saved value. */
     const bool dual_set = s_settings.antenna_dual != 0;
     printf("GNSS antenna mode setting: %s\n", dual_set ? "dual" : "single");
-    printf("platform setting: %s (GNSS course as heading: %s)\n",
+    printf("platform setting: %s (INS course yaw: %s)\n",
            settings_platform_name(settings_platform(&s_settings)),
-           settings_platform(&s_settings) == APP_PLATFORM_TRACTOR ||
-                   settings_platform(&s_settings) == APP_PLATFORM_FIXED_WING
+           settings_platform(&s_settings) == APP_PLATFORM_TRACTOR
                ? (dual_set ? "no, dual-antenna heading" : "yes, single antenna")
                : "no, not on this platform");
+    printf("INS height from: %s (setting %s)\n",
+           settings_ins_gnss_height(&s_settings, settings_platform(&s_settings)) ? "GNSS" : "barometer",
+           settings_height_src_name(s_settings.height_src));
     /* The platform in effect since boot, as for the other platform choices. */
     s_paogi_on = settings_platform(&s_boot_settings) == APP_PLATFORM_TRACTOR;
     if (s_paogi_on) {

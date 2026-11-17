@@ -105,7 +105,16 @@ static void filter_init(nav_antenna_t mode)
     opt.automotive_mode = mode != NAV_ANT_DUAL && s_p.course_yaw;
     opt.automotive_min_speed_mps = s_p.automotive_min_speed;
     opt.max_deadreckoning_sec = s_p.max_deadreckoning_s;
+    /* Keep the GNSS height row (nav_params_t.baro_height_off, web setting
+     * height_src). */
+    opt.baro_height_disable = s_p.baro_height_off;
     opt.estimate_mag_bias = s_p.use_mag && APP_ESTIMATE_MAG_BIAS;
+    /* RTK-grade floors (0 would mean INSLIB's single-frequency defaults);
+     * main.c raises the position sigma itself for the weaker fix types. */
+    opt.gnss_pos_stddev_floor_hor_m = APP_GNSS_FLOOR_POS_HOR_M;
+    opt.gnss_pos_stddev_floor_ver_m = APP_GNSS_FLOOR_POS_VER_M;
+    opt.gnss_vel_stddev_floor_hor_mps = APP_GNSS_FLOOR_VEL_HOR_MPS;
+    opt.gnss_vel_stddev_floor_ver_mps = APP_GNSS_FLOOR_VEL_VER_MPS;
     /* nav_suite_init() copies it into the ARS/AHRS stillness detectors. */
     opt.auto_zupt_static_gyr_stddev_rps = APP_STILL_GYR_STDDEV_DPS * 0.017453293f;
     /* nav_suite applies it to every sub-filter (ins_apply_calibration). The
@@ -124,6 +133,16 @@ static void filter_init(nav_antenna_t mode)
     }
 
     nav_suite_init(&s_suite, &init, &opt);
+    if (s_p.baro_height_off) {
+        /* INS on the GNSS height: offset filter tuning (web settings,
+         * defaults APP_HEIGHT_OFFSET_*; 0 = INSLIB's default).
+         * nav_suite_init() zeroes the template, and the filter is built
+         * from it at its first baro/GNSS pair, so setting it here is in
+         * time. */
+        s_suite.local_gnss_cfg.min_update_interval_sec = s_p.offset_interval_s;
+        s_suite.local_gnss_cfg.stddev_inflation_factor = s_p.offset_inflation;
+        s_suite.local_gnss_cfg.rw_stddev_mps = s_p.offset_rw_mps;
+    }
     s_mag_model_set = false;
     pole_aid_cfg_t pc;
     pole_aid_default_cfg(&pc);

@@ -123,6 +123,16 @@ static void test_interval_watch()
     CHECK(w.classify(20'000'000) == FLOW_F_AFTER_GAP);  // the left-out trigger
     CHECK(w.classify(10'000'000) == 0);
     CHECK(w.classify(35'000'000) == FLOW_F_DROPPED);
+
+    // A lost frame makes the same two-pulse interval as the gap, but it skips
+    // an ordinary pulse: DROPPED, and the next real gap is still on time.
+    flow::IntervalWatch v;
+    for (int i = 0; i < 10; i++) CHECK(v.classify(10'000'000) == 0);
+    CHECK(v.classify(20'000'000) == FLOW_F_AFTER_GAP);  // anchor
+    for (int i = 0; i < 30; i++) CHECK(v.classify(10'000'000) == 0);
+    CHECK(v.classify(20'000'000) == FLOW_F_DROPPED);    // lost frame
+    for (int i = 0; i < 222; i++) CHECK(v.classify(10'000'000) == 0);
+    CHECK(v.classify(20'000'000) == FLOW_F_AFTER_GAP);  // the real gap, 256 pulses on
 }
 
 // Speed on a moving sequence at the default processing size (320x200).

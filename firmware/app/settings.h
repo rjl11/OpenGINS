@@ -25,14 +25,23 @@
  * migrates it. Add new fields at the end, so an older record is a prefix
  * and can be migrated: version 1 (140 bytes, up to platform_p1), version 2
  * (160 bytes, up to the flow geometry), version 3 (164 bytes, up to the
- * sensors fitted) and version 4 (168 bytes, up to the dead-reckoning
- * window) are read with the newer fields at their defaults.
+ * sensors fitted), version 4 (168 bytes, up to the dead-reckoning
+ * window), version 5 (172 bytes, up to the antenna height) and version 6
+ * (176 bytes, up to the height source) are read with the newer fields at
+ * their defaults.
  * (platform_p1 was added without a bump: see there.) */
-#define SETTINGS_VERSION    5
+#define SETTINGS_VERSION    7
 #define SETTINGS_V1_SIZE    140u
 #define SETTINGS_V2_SIZE    160u
 #define SETTINGS_V3_SIZE    164u
 #define SETTINGS_V4_SIZE    168u
+#define SETTINGS_V5_SIZE    172u
+#define SETTINGS_V6_SIZE    176u
+
+/* settings_t.height_src: where the INS takes its height from. */
+#define SETTINGS_HEIGHT_AUTO 0 /* by platform: GNSS on a survey pole, else the barometer */
+#define SETTINGS_HEIGHT_BARO 1 /* the barometer (INSLIB's choice when one streams) */
+#define SETTINGS_HEIGHT_GNSS 2 /* the GNSS height (INSLIB baro_height_disable) */
 
 typedef struct {
     /* Filter: applied live, the filter re-initialises. */
@@ -78,6 +87,21 @@ typedef struct {
      * ground along the body down axis, m, 0 = output the antenna position.
      * Applied live on core 0 (the output position only). */
     float ant_height_m;
+
+    /* Version 6. Height source of the INS, SETTINGS_HEIGHT_*. INSLIB picks
+     * it when the INS starts, so a change restarts the filter (live, no
+     * reboot). Only matters while the barometer streams: without one the
+     * INS uses the GNSS height anyway. Use settings_ins_gnss_height(). */
+    uint8_t height_src;
+
+    /* Version 7. INSLIB's offset filter (local_gnss_alt: the barometer's
+     * offset to the ellipsoid, the absolute height during an outage), used
+     * only while the INS keeps the GNSS height (settings_ins_gnss_height());
+     * otherwise INSLIB's defaults apply. 0 = INSLIB's default. Defaults
+     * APP_HEIGHT_OFFSET_*. A change restarts the filter. */
+    float offset_interval_s;     /* min_update_interval_sec, INSLIB 10 s */
+    float offset_inflation;      /* stddev_inflation_factor, INSLIB 3 */
+    float offset_rw_mps;         /* rw_stddev_mps [m/sqrt(s)], INSLIB 0.3 */
 } settings_t;
 
 /* The platform (APP_PLATFORM_*) the settings ask for. */
@@ -88,6 +112,13 @@ unsigned settings_platform(const settings_t *s);
  * only at a reboot. */
 float settings_ant_height(const settings_t *s, unsigned platform);
 const char *settings_platform_name(unsigned platform);
+
+/* True when the INS should keep the GNSS height (INSLIB
+ * baro_height_disable), from height_src and, for auto, the platform in
+ * effect (APP_PLATFORM_*). */
+bool settings_ins_gnss_height(const settings_t *s, unsigned platform);
+/* "auto", "baro" or "gnss"; NULL for an unknown value. */
+const char *settings_height_src_name(unsigned height_src);
 
 void settings_defaults(settings_t *s);
 

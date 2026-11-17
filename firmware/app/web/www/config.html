@@ -53,6 +53,7 @@ button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
 <section><h2>Sensors fitted</h2>
 <p class="note">Turn off what this vehicle doesn't have: it isn't started or read, and nothing of it reaches the filter. Applies live; the barometer and magnetometer restart the filter.</p>
 <label><span>barometer<small>BMP581</small></span><select name="sensor_baro"><option value="on">on</option><option value="off">off</option></select></label>
+<label><span>INS height from<small>chosen when the filter starts, so a change restarts it; with the barometer off the GNSS height is used anyway</small></span><select name="height_src" data-tip="Where the INS takes its height from. GNSS fuses the RTK height directly (centimetres); barometer gives a steady relative height (decimetres) whose absolute value follows GNSS only through the offset filter. auto: GNSS on a survey pole, barometer elsewhere."><option value="auto">auto: GNSS on a survey pole, else barometer</option><option value="baro">barometer</option><option value="gnss">GNSS (RTK)</option></select></label>
 <label><span>magnetometer<small>TM210, into the filter</small></span><select name="sensor_mag"><option value="on">on</option><option value="off">off</option></select></label>
 <label><span>optical flow<small>camera trigger, speed into the filter</small></span><select name="sensor_flow"><option value="on">on</option><option value="off">off</option></select></label>
 <label><span>wheel pulses<small>speed inputs</small></span><select name="sensor_wheel"><option value="on">on</option><option value="off">off</option></select></label>
@@ -74,6 +75,10 @@ button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
 <label><span>course min speed<small>m/s, 0 = INSLIB default</small></span><input name="automotive_min_speed" inputmode="decimal"></label>
 <p class="note">How long the filter keeps giving a position on the IMU alone after the last GNSS fix. Applies live, the filter keeps running.</p>
 <label><span>dead reckoning<small>s, 0 = INSLIB default (10 s)</small></span><input name="max_deadreckoning_s" inputmode="decimal"></label>
+<p class="note">Height offset filter: learns the barometer's offset to the GNSS height, which gives the absolute height during a GNSS outage. Used only while the INS takes its height from GNSS (see "INS height from"), else INSLIB's defaults apply. 0 = INSLIB default. Applies live: the filter restarts.</p>
+<label><span>offset fusion interval<small>s, 0 = INSLIB default (10 s)</small></span><input name="offset_interval_s" inputmode="decimal" data-tip="Shortest time between two baro/GNSS pairs fused into the offset. Shorter follows the barometer's drift faster and shrinks the height step when GNSS drops out; longer averages more noise. INSLIB's 10 s is sized for a barometric INS height."></label>
+<label><span>offset sigma inflation<small>×, 0 = INSLIB default (3)</small></span><input name="offset_inflation" inputmode="decimal" data-tip="Factor on the barometer and GNSS 1-sigma before a pair is fused. Lower trusts each pair more and converges faster; higher keeps a single pair from moving the offset far. 1 = the sigmas as reported."></label>
+<label><span>offset random walk<small>m/√s, 0 = INSLIB default (0.3)</small></span><input name="offset_rw_mps" inputmode="decimal" data-tip="How fast the offset may drift between pairs (weather, ISA-model error during height changes). Too low and real drift is taken for outliers and followed late; too high and the offset gets noisy."></label>
 </section>
 <section><h2>Wi-Fi</h2>
 <p class="note">Applies after a reboot. The access point OpenGINS is open, at 192.168.4.1.</p>
@@ -105,7 +110,8 @@ function fill(d){
   const s=d.settings;
   for(const el of f.elements){
     if(!el.name||el.name==="sta_password")continue;
-    if(s[el.name]!==undefined){el.value=s[el.name];el.title="default: "+d.defaults[el.name];}
+    /* Hover tooltip: the explanation (data-tip) where a field has one, then its default. */
+    if(s[el.name]!==undefined){el.value=s[el.name];el.title=(el.dataset.tip?el.dataset.tip+"\n":"")+"default: "+d.defaults[el.name];}
     el.classList.remove("changed");
   }
   f.sta_password.value="";pwTouched=false;

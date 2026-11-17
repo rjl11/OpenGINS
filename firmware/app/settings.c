@@ -22,7 +22,9 @@ _Static_assert(offsetof(settings_t, flow_height_m) == SETTINGS_V1_SIZE, "version
 _Static_assert(offsetof(settings_t, sensor_baro) == SETTINGS_V2_SIZE, "version 2 must be a prefix");
 _Static_assert(offsetof(settings_t, max_deadreckoning_s) == SETTINGS_V3_SIZE, "version 3 must be a prefix");
 _Static_assert(offsetof(settings_t, ant_height_m) == SETTINGS_V4_SIZE, "version 4 must be a prefix");
-_Static_assert(sizeof(settings_t) == 172, "settings_t size changed: bump SETTINGS_VERSION");
+_Static_assert(offsetof(settings_t, height_src) == SETTINGS_V5_SIZE, "version 5 must be a prefix");
+_Static_assert(offsetof(settings_t, offset_interval_s) == SETTINGS_V6_SIZE, "version 6 must be a prefix");
+_Static_assert(sizeof(settings_t) == 188, "settings_t size changed: bump SETTINGS_VERSION");
 
 static flash_rec_t s_rec;
 static unsigned s_loaded_version; /* of the record settings_load() read, 0 = none */
@@ -65,6 +67,29 @@ void settings_defaults(settings_t *s)
     s->sensor_wheel = APP_SENSOR_WHEEL;
     s->max_deadreckoning_s = APP_MAX_DEADRECKONING_SEC;
     s->ant_height_m = APP_ANT_HEIGHT_M;
+    s->height_src = SETTINGS_HEIGHT_AUTO;
+    s->offset_interval_s = APP_HEIGHT_OFFSET_INTERVAL_S;
+    s->offset_inflation = APP_HEIGHT_OFFSET_INFLATION;
+    s->offset_rw_mps = APP_HEIGHT_OFFSET_RW_MPS;
+}
+
+bool settings_ins_gnss_height(const settings_t *s, unsigned platform)
+{
+    switch (s->height_src) {
+    case SETTINGS_HEIGHT_BARO: return false;
+    case SETTINGS_HEIGHT_GNSS: return true;
+    default:                   return platform == APP_PLATFORM_POLE;
+    }
+}
+
+const char *settings_height_src_name(unsigned height_src)
+{
+    switch (height_src) {
+    case SETTINGS_HEIGHT_AUTO: return "auto";
+    case SETTINGS_HEIGHT_BARO: return "baro";
+    case SETTINGS_HEIGHT_GNSS: return "gnss";
+    default:                   return NULL;
+    }
 }
 
 unsigned settings_platform(const settings_t *s)
@@ -97,6 +122,8 @@ bool settings_load(settings_t *s)
         /* An older record: its fields over the defaults of the newer ones.
          * The next save writes the current version. Newest first. */
         static const struct { uint16_t version, size; } k_old[] = {
+            { 6, SETTINGS_V6_SIZE },
+            { 5, SETTINGS_V5_SIZE },
             { 4, SETTINGS_V4_SIZE },
             { 3, SETTINGS_V3_SIZE },
             { 2, SETTINGS_V2_SIZE },
@@ -179,6 +206,18 @@ const char *settings_validate(const settings_t *s)
     }
     if (s->sensor_baro > 1 || s->sensor_mag > 1 || s->sensor_flow > 1 || s->sensor_wheel > 1) {
         return "sensors: each must be on or off";
+    }
+    if (!in_range(s->offset_interval_s, 0.0f, 600.0f)) {
+        return "offset fusion interval: must be within 0 .. 600 s (0 = INSLIB default, 10 s)";
+    }
+    if (!in_range(s->offset_inflation, 0.0f, 10.0f)) {
+        return "offset sigma inflation: must be within 0 .. 10 (0 = INSLIB default, 3)";
+    }
+    if (!in_range(s->offset_rw_mps, 0.0f, 10.0f)) {
+        return "offset random walk: must be within 0 .. 10 m/sqrt(s) (0 = INSLIB default, 0.3)";
+    }
+    if (settings_height_src_name(s->height_src) == NULL) {
+        return "INS height source: auto, baro or gnss";
     }
     if (s->wifi_mode > APP_WIFI_AP) {
         return "wifi_mode: must be auto, sta or ap";

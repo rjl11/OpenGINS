@@ -69,9 +69,9 @@ It must report nothing in flash that is reachable from core 1 or the ISRs. If co
 
 ### Continuous integration
 
-`.github/workflows/build.yml` runs on every push to `main`, on pull requests and by hand. It builds the firmware in a Debian 13 container (`arm-none-eabi-gcc` 14.2, Pico SDK 2.3.1) in four configurations (`pole`; `tractor` with `dual`; `multirotor` with `WEB_MODE=switch`; `WEB_MODE=off`) and runs `check_ram_path.py` on each. It also runs the host tests below. Each configuration's `app.uf2` and `app.elf` can be downloaded from the run's artifacts.
+`.github/workflows/build.yml` runs on every push to `main`, on pull requests and by hand. It builds the firmware in a Debian 13 container (`arm-none-eabi-gcc` 14.2, Pico SDK 2.3.1) in five configurations (`pole`; `tractor`; `tractor` with `dual`; `multirotor` with `WEB_MODE=switch`; `WEB_MODE=off`) and runs `check_ram_path.py` on each. It also runs the host tests below. Each configuration's `app.uf2` and `app.elf` can be downloaded from the run's artifacts.
 
-`.github/workflows/release.yml` makes a release from a version tag: push a tag such as `v0.1.0` (`git tag v0.1.0 && git push origin v0.1.0`). It runs the same build and tests, then publishes a GitHub release with one `opengins-<tag>-<configuration>.uf2` per configuration. Only the two newest releases are kept. Older releases are deleted, but their tags stay.
+`.github/workflows/release.yml` makes a release from a version tag: push a tag such as `v0.1.0` (`git tag v0.1.0 && git push origin v0.1.0`). It runs the same build and tests, then publishes a GitHub release with a single file, `opengins-<tag>-AOG.uf2`. That is the `tractor` build for AgOpenGPS / AgOpenWeb, with a single antenna and the other options at their defaults. Only the two newest releases are kept. Older releases are deleted, but their tags stay.
 
 ### Build hosts with little RAM
 

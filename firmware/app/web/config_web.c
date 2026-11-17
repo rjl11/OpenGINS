@@ -111,6 +111,9 @@ static const float_field_t k_floats[] = {
     FF("acc_bias_rw", acc_bias_rw),
     FF("automotive_min_speed", automotive_min_speed),
     FF("max_deadreckoning_s", max_deadreckoning_s),
+    FF("offset_interval_s", offset_interval_s),
+    FF("offset_inflation", offset_inflation),
+    FF("offset_rw_mps", offset_rw_mps),
     FF("baseline_yaw_deg", baseline_yaw_deg),
     FF("baseline_gate_m", baseline_gate_m),
     FF("flow_height_m", flow_height_m),
@@ -167,6 +170,16 @@ static const char *apply_field(settings_t *s, const char *key, const char *val, 
             }
         }
         snprintf(err, cap, "platform: tractor, pole, multirotor or fixed_wing");
+        return err;
+    }
+    if (strcmp(key, "height_src") == 0) {
+        for (unsigned h = SETTINGS_HEIGHT_AUTO; h <= SETTINGS_HEIGHT_GNSS; h++) {
+            if (strcmp(val, settings_height_src_name(h)) == 0) {
+                s->height_src = (uint8_t)h;
+                return NULL;
+            }
+        }
+        snprintf(err, cap, "height_src: auto, baro or gnss");
         return err;
     }
     if (strcmp(key, "wifi_mode") == 0) {
@@ -248,6 +261,17 @@ static void post_handler(const char *uri, const char *body, size_t len, char *ou
         *out_len = reply(out, cap, false, "busy: the previous command is still running");
         return;
     }
+    /* The open access point has no password, so anyone in range can reach
+     * this page. Over it, only saving settings and the hold / auto calibration
+     * choices are accepted; the rest (erasing, rebooting, re-provisioning the
+     * receiver or IMU, learned-calibration changes) needs the station network. */
+    web_info_t wi;
+    web_get_info(&wi);
+    const bool on_open_ap = wi.state == WEB_WIFI_AP;
+    if (on_open_ap && kind != CFG_CMD_SAVE && kind != CFG_CMD_CALIB) {
+        *out_len = reply(out, cap, false, "refused over the open access point: use the station network");
+        return;
+    }
 
     static config_cmd_t cmd;
     memset(&cmd, 0, sizeof cmd);
@@ -281,6 +305,10 @@ static void post_handler(const char *uri, const char *body, size_t len, char *ou
             (cmd.calib_group == IMU_CALIB_GROUPS && cmd.calib_op != IMU_CALIB_OP_FACTORY)) {
             *out_len = reply(out, cap, false, "calib needs group=gyr|acc|mag|gyr_m|pole (all: factory only) "
                                               "and op=accept|hold|auto|clear|factory");
+            return;
+        }
+        if (on_open_ap && cmd.calib_op != IMU_CALIB_OP_HOLD && cmd.calib_op != IMU_CALIB_OP_AUTO) {
+            *out_len = reply(out, cap, false, "refused over the open access point: use the station network");
             return;
         }
     }
@@ -331,6 +359,9 @@ static void settings_obj(jw_t *w, const char *key, const settings_t *s)
     }
     jw_num(w, "automotive_min_speed", (double)s->automotive_min_speed, 2);
     jw_num(w, "max_deadreckoning_s", (double)s->max_deadreckoning_s, 1);
+    jw_num(w, "offset_interval_s", (double)s->offset_interval_s, 2);
+    jw_num(w, "offset_inflation", (double)s->offset_inflation, 2);
+    jw_num(w, "offset_rw_mps", (double)s->offset_rw_mps, 3);
     jw_num(w, "baseline_yaw_deg", (double)s->baseline_yaw_deg, 2);
     jw_num(w, "baseline_gate_m", (double)s->baseline_gate_m, 3);
     jw_num(w, "flow_height_m", (double)s->flow_height_m, 3);
@@ -342,6 +373,8 @@ static void settings_obj(jw_t *w, const char *key, const settings_t *s)
     jw_str(w, "sensor_mag", s->sensor_mag ? "on" : "off");
     jw_str(w, "sensor_flow", s->sensor_flow ? "on" : "off");
     jw_str(w, "sensor_wheel", s->sensor_wheel ? "on" : "off");
+    const char *hs = settings_height_src_name(s->height_src);
+    jw_str(w, "height_src", hs ? hs : "auto");
     jw_str(w, "antenna", s->antenna_dual ? "dual" : "single");
     jw_str(w, "platform", settings_platform_name(settings_platform(s)));
     jw_num(w, "ant_height_m", (double)s->ant_height_m, 3);

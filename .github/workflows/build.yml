@@ -25,6 +25,9 @@ jobs:
         include:
           - name: pole
             args: ""
+          # The build release.yml publishes (AgOpenGPS / AgOpenWeb).
+          - name: tractor
+            args: "-DPLATFORM=tractor"
           - name: tractor-dual
             args: "-DPLATFORM=tractor -DGNSS_ANTENNA_MODE=dual"
           - name: multirotor-web-switch
