@@ -105,6 +105,7 @@ static void filter_init(nav_antenna_t mode)
     opt.automotive_mode = mode != NAV_ANT_DUAL && s_p.course_yaw;
     opt.automotive_min_speed_mps = s_p.automotive_min_speed;
     opt.max_deadreckoning_sec = s_p.max_deadreckoning_s;
+    opt.gnss_pos_decimation = s_p.gnss_pos_decim;
     /* Keep the GNSS height row (nav_params_t.baro_height_off, web setting
      * height_src). */
     opt.baro_height_disable = s_p.baro_height_off;
@@ -133,16 +134,20 @@ static void filter_init(nav_antenna_t mode)
     }
 
     nav_suite_init(&s_suite, &init, &opt);
-    if (s_p.baro_height_off) {
-        /* INS on the GNSS height: offset filter tuning (web settings,
-         * defaults APP_HEIGHT_OFFSET_*; 0 = INSLIB's default).
-         * nav_suite_init() zeroes the template, and the filter is built
-         * from it at its first baro/GNSS pair, so setting it here is in
-         * time. */
-        s_suite.local_gnss_cfg.min_update_interval_sec = s_p.offset_interval_s;
-        s_suite.local_gnss_cfg.stddev_inflation_factor = s_p.offset_inflation;
-        s_suite.local_gnss_cfg.rw_stddev_mps = s_p.offset_rw_mps;
-    }
+    /* Offset filter tuning, with either height source (web settings,
+     * defaults APP_HEIGHT_OFFSET_*; 0 = INSLIB's default). With the
+     * barometric INS height its sigma also sets how much of the weather
+     * drift stays in the published ellipsoid height (app_config.h).
+     * nav_suite_init() zeroes the template, and the filter is built from it
+     * at its first baro/GNSS pair, so setting it here is in time. */
+    s_suite.local_gnss_cfg.min_update_interval_sec = s_p.offset_interval_s;
+    s_suite.local_gnss_cfg.stddev_inflation_factor = s_p.offset_inflation;
+    s_suite.local_gnss_cfg.rw_stddev_mps = s_p.offset_rw_mps;
+    /* The barometer sigma only with the barometric INS height, where the
+     * offset's sigma stays in the published height. With the GNSS height
+     * INSLIB's 2 m averages more pairs: 2 cm rms handover error against
+     * 4 cm with 0.1 m in the overnight log (app_config.h). */
+    s_suite.local_gnss_cfg.local_stddev_m = s_p.baro_height_off ? 0.0f : s_p.offset_baro_sd_m;
     s_mag_model_set = false;
     pole_aid_cfg_t pc;
     pole_aid_default_cfg(&pc);
@@ -541,6 +546,9 @@ static void core1_main(void)
                  * at every check (ins_max_dr_sec), so the running filter takes
                  * it without a restart. */
                 old.max_deadreckoning_s = s_p.max_deadreckoning_s;
+                /* The position decimation too: INSLIB reads it at every fix,
+                 * and its phase counter wraps at the new value. */
+                old.gnss_pos_decim = s_p.gnss_pos_decim;
                 /* So is the pole aiding (the antenna height): pole_aid takes
                  * the new tip without a restart. */
                 old.pole_aid = s_p.pole_aid;
@@ -549,6 +557,9 @@ static void core1_main(void)
                     restart = true;
                 } else {
                     s_suite.ins.opt.max_deadreckoning_sec = s_p.max_deadreckoning_s;
+                    /* 0 = INSLIB's default, which ins_init resolves only
+                     * at a start: resolve it here the same way. */
+                    s_suite.ins.opt.gnss_pos_decimation = s_p.gnss_pos_decim > 0 ? s_p.gnss_pos_decim : 1;
                     pole_aid_set_geometry(&s_pole, s_p.pole_aid, s_p.tip_leverarm_m, s_p.leverarm_m);
                 }
             }

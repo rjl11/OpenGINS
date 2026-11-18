@@ -27,6 +27,8 @@ Work in progress. The firmware builds, and its parts have been tested on the ben
 
 The Pico configures the GNSS receiver and the IMU itself at boot, so neither needs setting up with a PC tool first. It detects whether a UM980 or a UM982 is fitted, checks the receiver's settings and sends the commands for the logs, rates and antenna mode on COM1 when they differ ([plans/gnss-um98x-config.md](plans/gnss-um98x-config.md)). The antenna mode (single, or dual with GNSS heading on a UM982) is a build default that the web page can override, applied after a reboot. The receiver's ports are never locked. The TM210 is set to send raw data at 800 Hz on UART0 at 921600 ([plans/imu-tm210-config.md](plans/imu-tm210-config.md)); the Pico never sends it calibration commands, because they only affect the TM210's own fused outputs, which aren't used.
 
+The INSLIB filter runs on core 1 at the IMU rate: one update per TM210 sample, 800 times a second. Core 1 publishes its solution (position, velocity, attitude) to core 0 every 100 ms, so every output gets it at 10 Hz: NMEA over Bluetooth, `$PAOGI` on USB and `/status.json` on the web server. The text status report on USB prints it once a second. The publish period is `PUBLISH_PERIOD_US` in [`firmware/app/nav_core1.c`](firmware/app/nav_core1.c).
+
 The GPIO assignments are all in [`firmware/app/board_pins.h`](firmware/app/board_pins.h). No other file names a pin number.
 
 ## Repository layout

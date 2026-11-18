@@ -144,6 +144,9 @@ typedef struct {
     float automotive_min_speed;  /* m/s, 0 = INSLIB default */
     float max_deadreckoning_s;   /* s, 0 = INSLIB default; a change alone
                                     doesn't restart the filter */
+    int   gnss_pos_decim;        /* INSLIB gnss_pos_decimation, 0 = INSLIB
+                                    default; applied live like
+                                    max_deadreckoning_s */
     float gyr_fixed_bias[3];     /* rad/s, learned at standstills (imu_calib.h) */
     float gyr_misalignment[9];   /* column-major, all zero = identity (imu_calib.h) */
     float acc_misalignment[9];   /* column-major, all zero = identity (imu_calib.h) */
@@ -162,17 +165,18 @@ typedef struct {
     /* INSLIB baro_height_disable: the INS fuses the full 3D GNSS position
      * instead of taking its height from the barometer, where the RTK height
      * is centimetres and the barometer only decimetres; baro_alt still runs
-     * as the height during an outage. Also selects the offset-filter tuning
-     * below. From the web setting height_src: auto = true on a survey pole
+     * as the height during an outage. From the web setting height_src: auto = true on a survey pole
      * (the platform in effect since boot). */
     bool  baro_height_off;
-    /* INSLIB's offset filter (local_gnss_cfg), applied only while
-     * baro_height_off: min_update_interval_sec, stddev_inflation_factor and
-     * rw_stddev_mps; 0 = INSLIB's default. Web settings, defaults
+    /* INSLIB's offset filter (local_gnss_cfg), with either height source:
+     * min_update_interval_sec, stddev_inflation_factor, rw_stddev_mps and
+     * local_stddev_m (this one only without baro_height_off);
+     * 0 = INSLIB's default. Web settings, defaults
      * APP_HEIGHT_OFFSET_*. A change restarts the filter. */
     float offset_interval_s;
     float offset_inflation;
     float offset_rw_mps;
+    float offset_baro_sd_m;
     /* Survey pole with an antenna height (pole_aid.h): planted-tip
      * constraint, yaw fixes from sway, magnetometer trust gate. With the
      * tip lever arm (IMU to tip, body FRD: the lever arm plus the antenna
@@ -189,8 +193,8 @@ void nav_start(nav_antenna_t mode, const nav_params_t *params);
 
 /* New filter settings: core 1 picks them up before its next sample and
  * re-initialises the filter (re-align, then navigate). Output pauses until
- * then; n_reinit counts it. A change to max_deadreckoning_s alone is applied
- * to the running filter instead. */
+ * then; n_reinit counts it. A change to max_deadreckoning_s or
+ * gnss_pos_decim alone is applied to the running filter instead. */
 void nav_set_params(const nav_params_t *params);
 
 /* Each returns false if the queue was full and the sample was dropped. */

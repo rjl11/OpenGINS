@@ -78,7 +78,7 @@ static void trigger_init(unsigned pin, uint32_t hz, uint32_t width_us)
     uint32_t div = (uint32_t)(((uint64_t)sys + (uint64_t)hz * 65536u - 1u) / ((uint64_t)hz * 65536u));
     if (div < 1u) div = 1u;
     if (div > 255u) div = 255u;
-    /* Prefer a divider that makes the period exact (150 MHz, 100 Hz: 25). */
+    /* Prefer a divider that makes the period exact (266 MHz, 100 Hz: 50). */
     for (uint32_t d = div; d <= 255u; d++) {
         if (sys % (d * hz) == 0u) {
             div = d;

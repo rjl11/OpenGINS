@@ -10,6 +10,7 @@ Planning documents for OpenGINS: system architecture, hardware selection (MCU, s
 | [esp32-s3-wifi-companion.md](esp32-s3-wifi-companion.md) | Plain Pico 2 + ESP32-S3 as Wi-Fi/BLE companion: link, protocol, split of work |
 | [pico2-zero2w-usb-companion.md](pico2-zero2w-usb-companion.md) | Plain Pico 2 + Pi Zero 2 W as Linux companion over USB: split of work, RTCM into COM2, stratum 1 NTP, SWD debug rig, serial over TCP to the receiver |
 | [inslib-nav-suite.md](inslib-nav-suite.md) | INSLIB integration through `nav_suite`: options, epoch building, outputs |
+| [barometer-height.md](barometer-height.md) | Barometer height: weather drift in an overnight log, why the published height with the barometric INS height was metres off (offset filter sigma, INSLIB soft threshold), the barometer sigma fix, replay with simulated RTK, open tests |
 | [imu-tm210.md](imu-tm210.md) | TM210 IMU configuration, protocol, unit/frame conversion and calibration for INSLIB |
 | [imu-tm210-config.md](imu-tm210-config.md) | TM210 auto-configuration by the MCU: Setting object, boot check/provision state machine, RAM-then-flash commit |
 | [imu-auto-calibration.md](imu-auto-calibration.md) | Background IMU and magnetometer calibration on core 0 for tractor, survey pole and UAV: observability per platform, prior-based fits, gates, flash record, apply at boot |

@@ -127,6 +127,28 @@ The firmware prints a status report once a second on its USB serial port (USB CD
 python firmware/tools/field_log.py --help
 ```
 
+A long, unattended recording on a Linux host with the Pico on its USB (stop it with `sudo pkill -INT -f 'field_log.py record'`, which turns the log off on the Pico):
+
+```bash
+sudo nohup python3 firmware/tools/field_log.py record /dev/serial/by-id/usb-Raspberry_Pi_Pico_*-if00 -o log.bin -q --every 60 > log.txt 2>&1 < /dev/null &
+```
+
+### Log tools
+
+For the barometer and height tuning (all in `firmware/tools/`; the Python ones need numpy and matplotlib):
+
+- `field_log_1s.py LOG.bin OUT.csv`: barometer, GNSS height and fix, and INSLIB height as 1 s rows (a whole night in about 30 s; also works on a log still being written).
+- `baro_night_plot.py LOG_1s.csv OUT.png`: the barometric height over the GNSS height by fix type, their difference while RTK fixed, pressure and temperature, satellites, INSLIB's `height_m`.
+- `inslib_replay.c`: the logged IMU, magnetometer and barometer through INSLIB `nav_suite` with the firmware's settings (`app_config.h`) and simulated GNSS, RTK fixed for the whole run at the median of the logged fixed epochs (options for the noise, the truth, the height source and the offset filter; run it without arguments for the list). It needs a host gcc; `inslib_replay.sh` builds it and runs both height sources in parallel, into `temp/replay/`. About 6 minutes for a 7 h log on a 6-core ARM board.
+- `inslib_replay_plot.py OUT.png RUN.csv=label ...`: the published ellipsoid height against the truth, the local heights, the height a GNSS outage would hand over to, the offset filter.
+
+```bash
+python firmware/tools/field_log_1s.py log.bin temp/log_1s.csv
+python firmware/tools/baro_night_plot.py temp/log_1s.csv temp/log_baro.png
+sh firmware/tools/inslib_replay.sh log.bin
+python firmware/tools/inslib_replay_plot.py temp/replay.png temp/replay/log_gnss.csv=gnss temp/replay/log_baro.csv=baro
+```
+
 ## Host tests
 
 The calibration, pole, speed, ground-point, `$PAOGI`, geoid and flow-link code is plain C that also builds on a PC. Each test exits with 0 when all checks pass. From the repo root (`temp/` is git-ignored):

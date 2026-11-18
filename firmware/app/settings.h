@@ -26,17 +26,20 @@
  * and can be migrated: version 1 (140 bytes, up to platform_p1), version 2
  * (160 bytes, up to the flow geometry), version 3 (164 bytes, up to the
  * sensors fitted), version 4 (168 bytes, up to the dead-reckoning
- * window), version 5 (172 bytes, up to the antenna height) and version 6
- * (176 bytes, up to the height source) are read with the newer fields at
- * their defaults.
+ * window), version 5 (172 bytes, up to the antenna height), version 6
+ * (176 bytes, up to the height source), version 7 (188 bytes, up to the
+ * offset filter) and version 8 (192 bytes, up to the GNSS position
+ * decimation) are read with the newer fields at their defaults.
  * (platform_p1 was added without a bump: see there.) */
-#define SETTINGS_VERSION    7
+#define SETTINGS_VERSION    9
 #define SETTINGS_V1_SIZE    140u
 #define SETTINGS_V2_SIZE    160u
 #define SETTINGS_V3_SIZE    164u
 #define SETTINGS_V4_SIZE    168u
 #define SETTINGS_V5_SIZE    172u
 #define SETTINGS_V6_SIZE    176u
+#define SETTINGS_V7_SIZE    188u
+#define SETTINGS_V8_SIZE    192u
 
 /* settings_t.height_src: where the INS takes its height from. */
 #define SETTINGS_HEIGHT_AUTO 0 /* by platform: GNSS on a survey pole, else the barometer */
@@ -95,13 +98,28 @@ typedef struct {
     uint8_t height_src;
 
     /* Version 7. INSLIB's offset filter (local_gnss_alt: the barometer's
-     * offset to the ellipsoid, the absolute height during an outage), used
-     * only while the INS keeps the GNSS height (settings_ins_gnss_height());
-     * otherwise INSLIB's defaults apply. 0 = INSLIB's default. Defaults
+     * offset to the ellipsoid, the absolute height during an outage, and
+     * with the barometric INS height also the drift taken back off the
+     * published ellipsoid height), with either height source.
+     * 0 = INSLIB's default. Defaults
      * APP_HEIGHT_OFFSET_*. A change restarts the filter. */
     float offset_interval_s;     /* min_update_interval_sec, INSLIB 10 s */
     float offset_inflation;      /* stddev_inflation_factor, INSLIB 3 */
     float offset_rw_mps;         /* rw_stddev_mps [m/sqrt(s)], INSLIB 0.3 */
+
+    /* Version 8. INSLIB gnss_pos_decimation: the GNSS position on 1 of
+     * every N fused epochs, the velocity alone on the others. A whole
+     * number 0 .. 100 (a float, so it goes through the web form's number
+     * fields); 0 = INSLIB's default (1). Default APP_GNSS_POS_DECIMATION.
+     * Applied live, no filter restart. */
+    float gnss_pos_decim;
+
+    /* Version 9. The offset filter's barometer 1-sigma per pair
+     * (local_gnss_cfg.local_stddev_m) [m], used only with the barometric
+     * INS height (INSLIB's default with the GNSS height); 0 = INSLIB's default
+     * (INS_DEFAULT_BARO_STDDEV_M, 2 m). Default APP_HEIGHT_OFFSET_BARO_SD_M.
+     * A change restarts the filter. */
+    float offset_baro_sd_m;
 } settings_t;
 
 /* The platform (APP_PLATFORM_*) the settings ask for. */

@@ -23,6 +23,8 @@ Rough CPU budget, scaling the M4F figures to an M33 at 150 MHz:
 
 That totals roughly **5–10 % of one core**. The second core is free for parsing and I/O. The RP2350's double-precision coprocessor makes the few double operations (lat/lon) cheaper than on the M4F reference.
 
+Since 2026-11-18 the firmware runs the RP2350 at 266 MHz (an overclock, core voltage 1.20 V, set in `firmware/CMakeLists.txt`), so the figures below, taken at 150 MHz, should drop to about 56 % of these values where the work is CPU bound (estimate, not yet measured; flash-cache misses and peripheral waits don't scale).
+
 **Measured on the Pico 2 W (2026-11-15, standing still, single antenna, 20 Hz GNSS, Wi-Fi joined, web page not open, clock 150 MHz):**
 - Filter in `FULL`: `nav_suite_update()` takes 256–284 µs on average and 1.54–1.64 ms at worst, so about 21–23 % of core 1 for the filter alone. The worst update is longer than one 1.25 ms IMU tick, so the queue absorbs it (no drops seen). The load meter's figure for the whole core 1 loop in `FULL` is not measured yet (the first meter read 30 %, but its method was wrong, see below).
 - Filter in `ATTITUDE_ONLY` (the unit didn't reach `FULL` that day, with the old build either): core 1 about **11 %** (update mean 133 µs), core 0 about **17–19 %**.

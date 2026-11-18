@@ -24,7 +24,9 @@ _Static_assert(offsetof(settings_t, max_deadreckoning_s) == SETTINGS_V3_SIZE, "v
 _Static_assert(offsetof(settings_t, ant_height_m) == SETTINGS_V4_SIZE, "version 4 must be a prefix");
 _Static_assert(offsetof(settings_t, height_src) == SETTINGS_V5_SIZE, "version 5 must be a prefix");
 _Static_assert(offsetof(settings_t, offset_interval_s) == SETTINGS_V6_SIZE, "version 6 must be a prefix");
-_Static_assert(sizeof(settings_t) == 188, "settings_t size changed: bump SETTINGS_VERSION");
+_Static_assert(offsetof(settings_t, gnss_pos_decim) == SETTINGS_V7_SIZE, "version 7 must be a prefix");
+_Static_assert(offsetof(settings_t, offset_baro_sd_m) == SETTINGS_V8_SIZE, "version 8 must be a prefix");
+_Static_assert(sizeof(settings_t) == 196,"settings_t size changed: bump SETTINGS_VERSION");
 
 static flash_rec_t s_rec;
 static unsigned s_loaded_version; /* of the record settings_load() read, 0 = none */
@@ -71,6 +73,8 @@ void settings_defaults(settings_t *s)
     s->offset_interval_s = APP_HEIGHT_OFFSET_INTERVAL_S;
     s->offset_inflation = APP_HEIGHT_OFFSET_INFLATION;
     s->offset_rw_mps = APP_HEIGHT_OFFSET_RW_MPS;
+    s->gnss_pos_decim = (float)APP_GNSS_POS_DECIMATION;
+    s->offset_baro_sd_m = APP_HEIGHT_OFFSET_BARO_SD_M;
 }
 
 bool settings_ins_gnss_height(const settings_t *s, unsigned platform)
@@ -122,6 +126,8 @@ bool settings_load(settings_t *s)
         /* An older record: its fields over the defaults of the newer ones.
          * The next save writes the current version. Newest first. */
         static const struct { uint16_t version, size; } k_old[] = {
+            { 8, SETTINGS_V8_SIZE },
+            { 7, SETTINGS_V7_SIZE },
             { 6, SETTINGS_V6_SIZE },
             { 5, SETTINGS_V5_SIZE },
             { 4, SETTINGS_V4_SIZE },
@@ -215,6 +221,12 @@ const char *settings_validate(const settings_t *s)
     }
     if (!in_range(s->offset_rw_mps, 0.0f, 10.0f)) {
         return "offset random walk: must be within 0 .. 10 m/sqrt(s) (0 = INSLIB default, 0.3)";
+    }
+    if (!in_range(s->offset_baro_sd_m, 0.0f, 10.0f)) {
+        return "offset barometer sigma: must be within 0 .. 10 m (0 = INSLIB default, 2 m)";
+    }
+    if (!in_range(s->gnss_pos_decim, 0.0f, 100.0f) || s->gnss_pos_decim != (float)(int)s->gnss_pos_decim) {
+        return "GNSS position decimation: a whole number 0 .. 100 (0 = INSLIB default, 1)";
     }
     if (settings_height_src_name(s->height_src) == NULL) {
         return "INS height source: auto, baro or gnss";

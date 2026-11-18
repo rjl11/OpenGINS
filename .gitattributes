@@ -3,3 +3,6 @@
 
 # Vendor receiver firmware
 *.pkg binary
+
+# Shell scripts run on Linux hosts, also from a Windows checkout or git archive
+*.sh text eol=lf

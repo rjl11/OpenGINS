@@ -252,7 +252,14 @@ static void on_loglist_line(um980_t *g, const char *line)
         return;
     }
     if (g->log_count < 0) {
-        g->log_count = atoi(tok[0]);
+        char *end;
+        long count = strtol(tok[0], &end, 10);
+        if (end == tok[0] || *end != '\0' || count < 0 || count > 1000) {
+            g->log_count = 0;   /* garbled count line: fail the check */
+            g->log_bad = true;
+        } else {
+            g->log_count = (int)count;
+        }
         return;
     }
     g->log_lines++;

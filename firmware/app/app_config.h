@@ -177,6 +177,18 @@
  * over that time has not been measured yet. */
 #define APP_MAX_DEADRECKONING_SEC   60.0f
 
+/* INSLIB gnss_pos_decimation, default of the web setting gnss_pos_decim:
+ * the GNSS position is fused on 1 of every N fused epochs (10 Hz, INSLIB's
+ * gnss_min_delay_ms), the velocity alone on the others. A position error
+ * that is correlated in time (multipath, ionosphere) otherwise makes the
+ * filter follow it and believe it too much. Replay of the 2026-11-17
+ * overnight log (static, indoor antenna, single point only): N = 50
+ * (position every 5 s) cut R95 from 2.03 to 1.79 m and the worst error
+ * from 4.7 to 3.0 m; N = 10 gave 1.88 / 4.2 m. Not yet tested with RTK or
+ * in motion, so the default stays 1 (every epoch, INSLIB's own default).
+ * 0 = INSLIB's default. Applies to every fix type. */
+#define APP_GNSS_POS_DECIMATION     1
+
 /* The TM210 magnetometer is fed to INSLIB (the AHRS and the INS). INSLIB
  * applies its own World Magnetic Model for the declination and the expected
  * field strength once core 1 has a GNSS position, and gates samples whose
@@ -319,20 +331,34 @@
 #define APP_GNSS_FLOOR_SINGLE_HOR_M 1.00f /* single, PPP converging, other */
 #define APP_GNSS_FLOOR_SINGLE_VER_M 1.50f
 
-/* While the INS keeps the GNSS height (web setting height_src; auto = the
- * survey pole): INSLIB's offset filter (local_gnss_alt), which learns the
- * barometer's offset to the ellipsoid while GNSS is up and gives the
- * absolute height as baro_alt + offset during an outage. With the RTK
- * height in the INS (baro_height_disable), the handover step at an outage
- * is the offset's error. INSLIB's defaults (10 s, 3x) are sized
- * for a barometric INS height; these fuse the pairs faster and trust them
- * more. The random walk stays at INSLIB's 0.3 m/sqrt(s): too low turns real
- * drift into outliers. 0 = INSLIB's default. Defaults of the web settings
- * under "Filter tuning" (settings_t.offset_*). Start values, to tune from
- * a field log with an RTK dropout. */
+/* INSLIB's offset filter (local_gnss_alt), with either height source (web
+ * setting height_src): it learns the barometer's offset to the ellipsoid
+ * while GNSS is up and gives the absolute height as baro_alt + offset during
+ * an outage. With the RTK height in the INS (baro_height_disable, the pole)
+ * the handover step at an outage is the offset's error. With the barometric
+ * INS height, nav_suite_get_height_ellipsoid() also takes the drift the
+ * offset has seen back off the published height, less one sigma of it, so
+ * an offset sigma that is too large stays in that height as a bias.
+ *
+ * The barometer sigma per pair is what sets that sigma: INSLIB's default
+ * (INS_DEFAULT_BARO_STDDEV_M, 2 m) is far above the barometer's real noise
+ * over a second (centimetres). In the replay of the overnight log of
+ * 2026-11-17 (stationary, 33 m of weather drift, simulated RTK fixed;
+ * firmware/tools/inslib_replay.c) it left the published barometric height
+ * 1.4 m high with 1 s / 1.5x (3.4 m with INSLIB's 10 s / 3x); 0.1 m gave
+ * 0.17 m rms and under 0.4 m from the start, 0.05 m 0.11 m rms. Not yet
+ * tested in motion, where the ISA-model error grows with the height
+ * change, so 0.1 m. Applied only with the barometric INS height: with the
+ * GNSS height the offset's sigma reaches no output, and INSLIB's 2 m
+ * averages more pairs (outage handover error 2 cm rms against 4 cm with
+ * 0.1 m in the same log). The random walk stays at INSLIB's 0.3 m/sqrt(s): lower
+ * follows the weather late (0.01 m/sqrt(s): 0.44 m rms handover error in
+ * the same log). 0 = INSLIB's default. Defaults of the web settings under
+ * "Filter tuning" (settings_t.offset_*). */
 #define APP_HEIGHT_OFFSET_INTERVAL_S  1.0f /* min_update_interval_sec */
 #define APP_HEIGHT_OFFSET_INFLATION   1.5f /* stddev_inflation_factor */
 #define APP_HEIGHT_OFFSET_RW_MPS      0.0f /* rw_stddev_mps          */
+#define APP_HEIGHT_OFFSET_BARO_SD_M   0.1f /* local_stddev_m         */
 
 /* A barometer sample older than this when it reaches the filter is dropped
  * (start value, not yet measured). */

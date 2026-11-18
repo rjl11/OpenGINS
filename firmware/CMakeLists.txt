@@ -20,6 +20,25 @@ set(CMAKE_CXX_STANDARD 17)
 
 pico_sdk_init()
 
+# System clock 266 MHz instead of the RP2350's rated 150 MHz (an overclock).
+# The SDK's runtime_init_clocks() sets it at boot from these values, before
+# any driver reads clock_get_hz(), so the UART, I2C, PWM and PIO dividers and
+# the CPU load meter follow it. Set for the whole project, not only app,
+# because the driver libraries compile their own copies of SDK sources.
+# PLL: 12 MHz x 133 = 1596 MHz VCO (limit 1600), / 6 / 1 = 266 MHz. The core
+# voltage is raised from 1.10 V to 1.20 V first. The CYW43 PIO SPI divider goes from 2 to 3, so the Wi-Fi chip's
+# clock stays at 44 MHz (its limit is 50 MHz; 2 would give 66.5 MHz). USB and
+# the ADC run from the USB PLL and the timer from clk_ref, so they don't move.
+add_compile_definitions(
+    SYS_CLK_MHZ=266
+    PLL_SYS_VCO_FREQ_HZ=1596000000
+    PLL_SYS_POSTDIV1=6
+    PLL_SYS_POSTDIV2=1
+    SYS_CLK_VREG_VOLTAGE_AUTO_ADJUST=1
+    SYS_CLK_VREG_VOLTAGE_MIN=VREG_VOLTAGE_1_20
+    CYW43_PIO_CLOCK_DIV_INT=3
+)
+
 add_subdirectory(drivers/uart_dma)
 add_subdirectory(drivers/bmp581)
 add_subdirectory(drivers/tm210)

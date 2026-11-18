@@ -21,14 +21,14 @@
  * flash cache), and a change that only shortens it moved a minimum-based
  * figure by several points with no change in the work done. Not a bin
  * centre either: the histogram also keeps each bin's exact cycles, because
- * rounding a 150-cycle pass to a 53 ns bin, times 900 000 passes a second,
+ * rounding a 150-cycle pass to an 8-cycle bin, times 900 000 passes a second,
  * moves the result by a few percent.
  *
  * Idle passes take a few microseconds, so they are timed with the core's own
  * SysTick at the processor clock: the RP2350's Cortex-M33 has no DWT cycle
  * counter (DWT_CTRL.NOCYCCNT is set). Each core has its own SysTick, so
  * cpu_load_init() and cpu_load_pass() must run on the core being measured.
- * The SysTick wraps every 2^24 cycles (112 ms at 150 MHz); a pass that
+ * The SysTick wraps every 2^24 cycles (63 ms at 266 MHz); a pass that
  * time_us_64() shows long goes to the histogram's top bin instead, so a wrap
  * can't fake a short one. If FreeRTOS later takes the SysTick, use its idle
  * hook instead.
@@ -44,7 +44,7 @@
 #include "hardware/structs/systick.h"
 #include "pico/time.h"
 
-#define CPU_LOAD_BIN_SHIFT 3u   /* histogram bins of 8 cycles (53 ns at 150 MHz) */
+#define CPU_LOAD_BIN_SHIFT 3u   /* histogram bins of 8 cycles (30 ns at 266 MHz) */
 #define CPU_LOAD_BINS      512u /* up to 4096 cycles (27 us); longer goes to the top bin */
 
 typedef struct {

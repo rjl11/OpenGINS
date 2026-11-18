@@ -292,6 +292,7 @@ static void nav_params_from_settings(nav_params_t *p, const settings_t *s)
     p->acc_bias_rw = s->acc_bias_rw;
     p->automotive_min_speed = s->automotive_min_speed;
     p->max_deadreckoning_s = s->max_deadreckoning_s;
+    p->gnss_pos_decim = (int)s->gnss_pos_decim;
     /* The platform in effect since boot, not the saved one: it changes at a
      * reboot, so a save never restarts the filter for it. */
     unsigned plat = settings_platform(&s_boot_settings);
@@ -302,13 +303,11 @@ static void nav_params_from_settings(nav_params_t *p, const settings_t *s)
     /* The web setting height_src; auto = GNSS height on the pole. A change
      * restarts the filter (INSLIB picks the height source at INS start). */
     p->baro_height_off = settings_ins_gnss_height(s, plat);
-    /* Used only with the GNSS height; left at 0 otherwise, so editing them
-     * on a barometer setup doesn't restart the filter for nothing. */
-    if (p->baro_height_off) {
-        p->offset_interval_s = s->offset_interval_s;
-        p->offset_inflation = s->offset_inflation;
-        p->offset_rw_mps = s->offset_rw_mps;
-    }
+    /* The offset filter, with either height source. */
+    p->offset_interval_s = s->offset_interval_s;
+    p->offset_inflation = s->offset_inflation;
+    p->offset_rw_mps = s->offset_rw_mps;
+    p->offset_baro_sd_m = s->offset_baro_sd_m;
     /* Pole aiding: the tip is the antenna height below the antenna, along
      * the pole axis (body down, or the learned axis, pole_mount.h). */
     float h_ant = settings_ant_height(s, plat);

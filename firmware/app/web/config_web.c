@@ -111,9 +111,11 @@ static const float_field_t k_floats[] = {
     FF("acc_bias_rw", acc_bias_rw),
     FF("automotive_min_speed", automotive_min_speed),
     FF("max_deadreckoning_s", max_deadreckoning_s),
+    FF("gnss_pos_decim", gnss_pos_decim),
     FF("offset_interval_s", offset_interval_s),
     FF("offset_inflation", offset_inflation),
     FF("offset_rw_mps", offset_rw_mps),
+    FF("offset_baro_sd_m", offset_baro_sd_m),
     FF("baseline_yaw_deg", baseline_yaw_deg),
     FF("baseline_gate_m", baseline_gate_m),
     FF("flow_height_m", flow_height_m),
@@ -359,9 +361,11 @@ static void settings_obj(jw_t *w, const char *key, const settings_t *s)
     }
     jw_num(w, "automotive_min_speed", (double)s->automotive_min_speed, 2);
     jw_num(w, "max_deadreckoning_s", (double)s->max_deadreckoning_s, 1);
+    jw_num(w, "gnss_pos_decim", (double)s->gnss_pos_decim, 0);
     jw_num(w, "offset_interval_s", (double)s->offset_interval_s, 2);
     jw_num(w, "offset_inflation", (double)s->offset_inflation, 2);
     jw_num(w, "offset_rw_mps", (double)s->offset_rw_mps, 3);
+    jw_num(w, "offset_baro_sd_m", (double)s->offset_baro_sd_m, 3);
     jw_num(w, "baseline_yaw_deg", (double)s->baseline_yaw_deg, 2);
     jw_num(w, "baseline_gate_m", (double)s->baseline_gate_m, 3);
     jw_num(w, "flow_height_m", (double)s->flow_height_m, 3);
