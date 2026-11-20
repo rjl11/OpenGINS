@@ -9,6 +9,7 @@
 
 #include "app_config.h"
 #include "flash_rec.h"
+#include "rtcm_src.h"
 
 #define REC_MAGIC       0x46435347u /* "GSCF" */
 /* The last two 4 KB sectors of the flash. */
@@ -26,7 +27,8 @@ _Static_assert(offsetof(settings_t, height_src) == SETTINGS_V5_SIZE, "version 5 
 _Static_assert(offsetof(settings_t, offset_interval_s) == SETTINGS_V6_SIZE, "version 6 must be a prefix");
 _Static_assert(offsetof(settings_t, gnss_pos_decim) == SETTINGS_V7_SIZE, "version 7 must be a prefix");
 _Static_assert(offsetof(settings_t, offset_baro_sd_m) == SETTINGS_V8_SIZE, "version 8 must be a prefix");
-_Static_assert(sizeof(settings_t) == 196,"settings_t size changed: bump SETTINGS_VERSION");
+_Static_assert(offsetof(settings_t, eth_fitted) == SETTINGS_V9_SIZE, "version 9 must be a prefix");
+_Static_assert(sizeof(settings_t) == 212,"settings_t size changed: bump SETTINGS_VERSION");
 
 static flash_rec_t s_rec;
 static unsigned s_loaded_version; /* of the record settings_load() read, 0 = none */
@@ -75,6 +77,12 @@ void settings_defaults(settings_t *s)
     s->offset_rw_mps = APP_HEIGHT_OFFSET_RW_MPS;
     s->gnss_pos_decim = (float)APP_GNSS_POS_DECIMATION;
     s->offset_baro_sd_m = APP_HEIGHT_OFFSET_BARO_SD_M;
+    static const uint8_t k_ip[4] = APP_ETH_IP, k_mask[4] = APP_ETH_MASK, k_gw[4] = APP_ETH_GW;
+    s->eth_fitted = APP_ETH_FITTED;
+    memcpy(s->eth_ip, k_ip, 4);
+    memcpy(s->eth_mask, k_mask, 4);
+    memcpy(s->eth_gw, k_gw, 4);
+    s->rtcm_src = RTCM_SRC_MODE_AUTO;
 }
 
 bool settings_ins_gnss_height(const settings_t *s, unsigned platform)
@@ -126,6 +134,7 @@ bool settings_load(settings_t *s)
         /* An older record: its fields over the defaults of the newer ones.
          * The next save writes the current version. Newest first. */
         static const struct { uint16_t version, size; } k_old[] = {
+            { 9, SETTINGS_V9_SIZE },
             { 8, SETTINGS_V8_SIZE },
             { 7, SETTINGS_V7_SIZE },
             { 6, SETTINGS_V6_SIZE },
@@ -158,6 +167,32 @@ bool settings_load(settings_t *s)
 }
 
 static bool in_range(float v, float lo, float hi) { return isfinite(v) && v >= lo && v <= hi; }
+
+static uint32_t ip_u32(const uint8_t a[4])
+{
+    return ((uint32_t)a[0] << 24) | ((uint32_t)a[1] << 16) | ((uint32_t)a[2] << 8) | a[3];
+}
+
+/* NULL if the Ethernet addresses make sense together. */
+static const char *eth_validate(const settings_t *s)
+{
+    if (s->eth_fitted > 1) {
+        return "Ethernet fitted: on or off";
+    }
+    uint32_t ip = ip_u32(s->eth_ip), mask = ip_u32(s->eth_mask), gw = ip_u32(s->eth_gw);
+    /* A contiguous mask, /8 .. /30. */
+    if ((~mask & (~mask + 1u)) != 0 || mask < 0xFF000000u || mask > 0xFFFFFFFCu) {
+        return "Ethernet subnet mask: contiguous, 255.0.0.0 .. 255.255.255.252";
+    }
+    if (s->eth_ip[0] == 0 || s->eth_ip[0] == 127 || s->eth_ip[0] >= 224 || (ip & ~mask) == 0 ||
+        (ip & ~mask) == ~mask) {
+        return "Ethernet IP address: a host address (not the network or broadcast address)";
+    }
+    if (gw != 0 && ((gw & mask) != (ip & mask) || gw == ip)) {
+        return "Ethernet gateway: 0.0.0.0 (none) or another address in the same subnet";
+    }
+    return NULL;
+}
 
 const char *settings_validate(const settings_t *s)
 {
@@ -227,6 +262,13 @@ const char *settings_validate(const settings_t *s)
     }
     if (!in_range(s->gnss_pos_decim, 0.0f, 100.0f) || s->gnss_pos_decim != (float)(int)s->gnss_pos_decim) {
         return "GNSS position decimation: a whole number 0 .. 100 (0 = INSLIB default, 1)";
+    }
+    if (rtcm_src_mode_name(s->rtcm_src) == NULL) {
+        return "correction source: auto, ethernet or bluetooth";
+    }
+    const char *eth = eth_validate(s);
+    if (eth != NULL) {
+        return eth;
     }
     if (settings_height_src_name(s->height_src) == NULL) {
         return "INS height source: auto, baro or gnss";

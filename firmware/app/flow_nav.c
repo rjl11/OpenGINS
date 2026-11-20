@@ -34,11 +34,17 @@ static void set_rotation(flow_nav_t *s)
 
 void flow_nav_init(flow_nav_t *s, const flow_nav_config_t *cfg)
 {
-    memset(s, 0, sizeof *s);
+    memset(s, 0, sizeof *s); /* no clock sync until flow_nav_set_clock() */
     s->cfg = *cfg;
     set_rotation(s);
     s->cos_tilt = 1.0f;
     s->tilt_ok = true;
+}
+
+void flow_nav_set_clock(flow_nav_t *s, flow_nav_clock_fn fn, void *ctx)
+{
+    s->clock = fn;
+    s->clock_ctx = ctx;
 }
 
 void flow_nav_set_geometry(flow_nav_t *s, float height_m, float cam_yaw_rad, const float leverarm_m[3])
@@ -134,6 +140,32 @@ static uint64_t exposure_mid(flow_nav_t *s, uint32_t ordinal, uint32_t exposure_
     return x->t_trig + s->cfg.exposure_delay_us + exposure_us / 2u;
 }
 
+/* Free-running: tracks the clock offset with every message (flow_nav.h). */
+static void free_track(flow_nav_t *s, const flow_msg_flow_t *m, uint64_t t_arr)
+{
+    const uint32_t off = (uint32_t)t_arr - m->pi_time_us;
+    if (!s->free_have) {
+        s->free_have = true;
+        s->free_off = off;
+        s->free_leak_t = t_arr;
+        return;
+    }
+    const uint64_t div = 1000000u / FLOW_NAV_FREE_LEAK_PPM; /* us per 1 us of creep */
+    if (t_arr > s->free_leak_t + div) {
+        const uint64_t k = (t_arr - s->free_leak_t) / div;
+        s->free_off += (uint32_t)k;
+        s->free_leak_t += k * div;
+    }
+    const int32_t lag = (int32_t)(off - s->free_off);
+    if (lag < 0) {
+        s->free_off = off;
+    } else if ((uint32_t)lag > FLOW_NAV_FREE_MAX_LAG_US) {
+        s->free_off = off;
+        s->free_leak_t = t_arr;
+        s->st.free_resets++;
+    }
+}
+
 bool flow_nav_message(flow_nav_t *s, const flow_msg_flow_t *m, uint64_t t_arrival_us, flow_nav_speed_t *out)
 {
     s->st.msgs++;
@@ -155,11 +187,11 @@ bool flow_nav_message(flow_nav_t *s, const flow_msg_flow_t *m, uint64_t t_arriva
         s->st.anchors++;
     }
 
-    if (!(m->flags & FLOW_F_TRIGGERED)) {
+    const bool free_run = !(m->flags & FLOW_F_TRIGGERED);
+    if (free_run) {
         s->st.untriggered++;
-        return false;
-    }
-    if (!s->anchored) {
+        free_track(s, m, t_arrival_us);
+    } else if (!s->anchored) {
         s->st.not_anchored++;
         return false;
     }
@@ -172,13 +204,34 @@ bool flow_nav_message(flow_nav_t *s, const flow_msg_flow_t *m, uint64_t t_arriva
         return false;
     }
 
-    const uint32_t ord = s->anchor_ord + (m->frame_seq - s->anchor_seq);
-    const uint32_t exp_us = (uint32_t)m->exposure_100us * 100u;
-    const uint64_t t1 = exposure_mid(s, ord, exp_us);
-    const uint64_t t0 = ord > 1u ? exposure_mid(s, ord - 1u, exp_us) : 0;
-    if (t0 == 0 || t1 == 0) {
-        s->st.no_exposure++;
-        return false;
+    uint64_t t0, t1;
+    uint64_t t_sync;
+    if (free_run && s->clock != NULL && s->clock(s->clock_ctx, m->pi_time_us, t_arrival_us, &t_sync)) {
+        t1 = (uint64_t)((int64_t)t_sync + s->cfg.sync_ts_to_mid_us);
+        if (m->pi_dt_us == 0u || t1 <= m->pi_dt_us || t1 > t_arrival_us) {
+            s->st.bad_dt++;
+            return false;
+        }
+        t0 = t1 - m->pi_dt_us;
+        s->st.synced++;
+    } else if (free_run) {
+        const uint64_t back = (uint64_t)(uint32_t)(((uint32_t)t_arrival_us - m->pi_time_us) - s->free_off) +
+                              s->cfg.free_latency_us;
+        if (m->pi_dt_us == 0u || t_arrival_us <= back + m->pi_dt_us) {
+            s->st.bad_dt++;
+            return false;
+        }
+        t1 = t_arrival_us - back;
+        t0 = t1 - m->pi_dt_us;
+    } else {
+        const uint32_t ord = s->anchor_ord + (m->frame_seq - s->anchor_seq);
+        const uint32_t exp_us = (uint32_t)m->exposure_100us * 100u;
+        t1 = exposure_mid(s, ord, exp_us);
+        t0 = ord > 1u ? exposure_mid(s, ord - 1u, exp_us) : 0;
+        if (t0 == 0 || t1 == 0) {
+            s->st.no_exposure++;
+            return false;
+        }
     }
     if (t1 <= t0 || t1 - t0 > 100000u) {
         s->st.bad_dt++;

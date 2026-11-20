@@ -1,0 +1,65 @@
+/dts-v1/;
+/plugin/;
+
+/*
+ * INNO-MAKER CAM-MIPI9281RAW-V2 (OV9281) on the Radxa ROCK 4SE CSI connector:
+ * I2C4 address 0x60, 2 data lanes at 400 MHz into ISP0 through MIPI D-PHY RX0.
+ * The module has its own 24 MHz oscillator and regulators; the fixed clock
+ * only tells the ov9282 driver its rate (it refuses anything but 24 MHz).
+ *
+ * Build: dtc -@ -I dts -O dtb -o rk3399-rock-4se-ov9281.dtbo rk3399-rock-4se-ov9281.dts
+ * Install: /boot/overlay-user/, user_overlays=rk3399-rock-4se-ov9281 (see setup.sh).
+ */
+
+&{/} {
+	ov9281_clk: ov9281-clk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <24000000>;
+		clock-output-names = "ov9281_xclk";
+	};
+};
+
+&i2c4 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	camera@60 {
+		compatible = "ovti,ov9281";
+		reg = <0x60>;
+		clocks = <&ov9281_clk>;
+
+		port {
+			ov9281_out: endpoint {
+				remote-endpoint = <&isp0_in>;
+				data-lanes = <1 2>;
+				link-frequencies = /bits/ 64 <400000000>;
+			};
+		};
+	};
+};
+
+&isp0 {
+	status = "okay";
+
+	ports {
+		port@0 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			isp0_in: endpoint@0 {
+				reg = <0>;
+				data-lanes = <1 2>;
+				remote-endpoint = <&ov9281_out>;
+			};
+		};
+	};
+};
+
+&isp0_mmu {
+	status = "okay";
+};
+
+&mipi_dphy_rx0 {
+	status = "okay";
+};

@@ -2,7 +2,8 @@
 
 Mirrors common/flow_link.h byte for byte (the C++ program in pi/flow uses
 the header itself); change both together.
-test_flow_link.py checks the example frame (FLOW_LINK_EXAMPLE_HEX in the header).
+test_flow_link.py checks the example frames (FLOW_LINK_EXAMPLE_HEX and the
+two FLOW_LINK_EXAMPLE_TIME_*_HEX in the header).
 """
 
 import re
@@ -17,6 +18,8 @@ BAUD = 115200
 GAP_PERIOD = 256
 
 MSG_FLOW = 1
+MSG_TIME_REQ = 2  # clock sync request, Pico -> unit (UDP only)
+MSG_TIME_RESP = 3  # clock sync reply, unit -> Pico (UDP only)
 
 F_VALID = 0x01
 F_AFTER_GAP = 0x02
@@ -26,6 +29,35 @@ F_DROPPED = 0x08
 _FLOW_FMT = "<IIIfffHBB"
 FLOW_LEN = struct.calcsize(_FLOW_FMT)
 assert FLOW_LEN == 28
+
+
+_TIME_REQ_FMT = "<I"  # seq
+_TIME_RESP_FMT = "<IIQ"  # seq, turnaround_us, unit_rx_us
+TIME_REQ_LEN = struct.calcsize(_TIME_REQ_FMT)
+TIME_RESP_LEN = struct.calcsize(_TIME_RESP_FMT)
+assert TIME_REQ_LEN == 4 and TIME_RESP_LEN == 16
+
+
+def time_req_payload(seq: int) -> bytes:
+    return struct.pack(_TIME_REQ_FMT, seq & 0xFFFFFFFF)
+
+
+def time_req_from_payload(p: bytes) -> int:
+    if len(p) != TIME_REQ_LEN:
+        raise ValueError(f"TIME_REQ payload is {len(p)} bytes, expected {TIME_REQ_LEN}")
+    return struct.unpack(_TIME_REQ_FMT, p)[0]
+
+
+def time_resp_payload(seq: int, turnaround_us: int, unit_rx_us: int) -> bytes:
+    return struct.pack(_TIME_RESP_FMT, seq & 0xFFFFFFFF, min(max(turnaround_us, 0), 0xFFFFFFFF),
+                       unit_rx_us & 0xFFFFFFFFFFFFFFFF)
+
+
+def time_resp_from_payload(p: bytes):
+    """(seq, turnaround_us, unit_rx_us)"""
+    if len(p) != TIME_RESP_LEN:
+        raise ValueError(f"TIME_RESP payload is {len(p)} bytes, expected {TIME_RESP_LEN}")
+    return struct.unpack(_TIME_RESP_FMT, p)
 
 
 def crc16(data: bytes) -> int:
@@ -105,10 +137,10 @@ def parse(buf: bytes):
             i = j + 1
 
 
-def example_hex_from_header(header: Path) -> str:
-    """The FLOW_LINK_EXAMPLE_HEX string from common/flow_link.h."""
+def example_hex_from_header(header: Path, name: str = "FLOW_LINK_EXAMPLE_HEX") -> str:
+    """An example frame string (FLOW_LINK_EXAMPLE_HEX by default) from common/flow_link.h."""
     lines = header.read_text(encoding="utf-8").splitlines()
-    start = next(i for i, l in enumerate(lines) if l.startswith("#define FLOW_LINK_EXAMPLE_HEX"))
+    start = next(i for i, l in enumerate(lines) if l.split()[:2] == ["#define", name])
     block = []
     for line in lines[start:]:
         block.append(line)

@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-#include <opencv2/core.hpp>
+#include "frame_source.hpp"
 
 namespace libcamera {
 class Camera;
@@ -33,36 +33,20 @@ class Stream;
 
 namespace flow {
 
-struct Frame {
-    cv::Mat grey;           // 8-bit, one channel, owned (copied out of the buffer)
-    int64_t sensor_ns = 0;  // SensorTimestamp: start of exposure, Pi monotonic clock
-    int     exposure_us = 0;
-};
-
-struct CameraParams {
-    int    index = 0;
-    int    width = 320, height = 200;  // processing size
-    double fps = 100.0;                // free-running rate
-    int    exposure_us = 1000;
-    float  gain = 4.0f;
-    int    max_queued = 4;  // frames waiting for the flow; older ones are dropped
-};
-
-class Camera {
+// sensor_ns is libcamera's SensorTimestamp: start of exposure, Pi monotonic clock.
+class Camera : public FrameSource {
 public:
     Camera();
-    ~Camera();
+    ~Camera() override;
     Camera(const Camera&) = delete;
     Camera& operator=(const Camera&) = delete;
 
     // Throws std::runtime_error on failure.
     void open(const CameraParams& p);
-    void start();
-    void stop();
-    // Waits up to timeout_ms for the next frame. False on timeout.
-    bool read(Frame& f, int timeout_ms);
-
-    uint64_t n_dropped() const { return n_dropped_; }
+    void start() override;
+    void stop() override;
+    bool read(Frame& f, int timeout_ms) override;
+    uint64_t n_dropped() const override { return n_dropped_; }
 
 private:
     void on_complete(libcamera::Request* req);

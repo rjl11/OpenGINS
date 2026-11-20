@@ -43,6 +43,7 @@ enum {
     CFG_PSRVELDRPOS,
     CFG_PVTALG,
     CFG_HEADING,
+    CFG_RTK_MMPL,
     CFG_COUNT
 };
 static const char *const k_cfg_fixed[CFG_COUNT] = {
@@ -53,13 +54,19 @@ static const char *const k_cfg_fixed[CFG_COUNT] = {
     [CFG_PSRVELDRPOS] = "PSRVELDRPOS DISABLE",
     [CFG_PVTALG] = "PVTALG MULTI",
     [CFG_HEADING] = "HEADING VARIABLELENGTH",
+    [CFG_RTK_MMPL] = "RTK MMPL 1",
 };
 #define CFG_BIT(i)              (1u << (i))
 /* PSRVELDRPOS may not be listed by CONFIG (seen on a UM982), so its absence
  * is not a mismatch. The command is then sent again on entering RUN.
  * PVTALG is listed once it has been set (seen on a UM980, 2026-11-12), so it
  * is required: a receiver still on its default (SINGLE on the UM982) gets
- * provisioned. */
+ * provisioned.
+ * RTK MMPL is listed once it has been set (UM980, 2026-11-18) but unknown on
+ * the UM982, so it is treated like PSRVELDRPOS: a wrong value is a mismatch,
+ * a missing line is set in RAM on entering RUN. It lowered the indoor errors
+ * (plans/gnss-um98x-config.md, "Bench results (2026-11-18/20, UM980 RTK
+ * settings rotation)"). */
 #define CFG_REQUIRED_COMMON     (CFG_BIT(CFG_COM1) | CFG_BIT(CFG_COM2) | CFG_BIT(CFG_COM3) | \
                                  CFG_BIT(CFG_PPS) | CFG_BIT(CFG_SIGNALGROUP) | CFG_BIT(CFG_PVTALG))
 
@@ -111,6 +118,7 @@ static const script_step_t k_script[] = {
     { OP_CMD,      "MODE ROVER SURVEY",                                5000, false },
     { OP_CMD,      "CONFIG PSRVELDRPOS DISABLE",                       5000, false },
     { OP_CMD,      "CONFIG PVTALG MULTI",                              5000, false },
+    { OP_CMD,      "CONFIG RTK MMPL 1",                                5000, false },
     { OP_CMD,      "CONFIG PPS ENABLE GPS POSITIVE 100000 1000 0 0",   5000, false },
     { OP_CMD,      "CONFIG HEADING VARIABLELENGTH",                    5000, true  },
     /* 4. Baud rates, our own port last. Its reply may come at either rate. */
@@ -216,6 +224,10 @@ static void on_config_line(um980_t *g, const char *line)
             continue;
         }
         size_t key_len = (size_t)(strchr(target, ' ') - target) + 1u; /* "COM1 " */
+        if (i == CFG_RTK_MMPL) {
+            /* "RTK " alone would also match RTK TIMEOUT and RTK RELIABILITY. */
+            key_len = sizeof "RTK MMPL " - 1u;
+        }
         if (strncmp(p, target, key_len) != 0) {
             continue;
         }
@@ -231,6 +243,9 @@ static void on_config_line(um980_t *g, const char *line)
         }
         if (i == CFG_PSRVELDRPOS) {
             g->psrvel_listed = true;
+        }
+        if (i == CFG_RTK_MMPL) {
+            g->mmpl_listed = true;
         }
     }
 }
@@ -347,6 +362,9 @@ static void enter_run(um980_t *g, uint64_t now)
             /* Not shown by CONFIG, so its state is unknown: set it (RAM only). */
             um980_send_line(g, "CONFIG PSRVELDRPOS DISABLE");
         }
+        if (!g->mmpl_listed) {
+            um980_send_line(g, "CONFIG RTK MMPL 1");
+        }
     }
 }
 
@@ -449,6 +467,7 @@ static void reset_check(um980_t *g)
     g->cfg_seen = 0;
     g->cfg_bad = false;
     g->psrvel_listed = false;
+    g->mmpl_listed = false;
     g->mode_ok = false;
     g->log_count = -1;
     g->log_lines = 0;

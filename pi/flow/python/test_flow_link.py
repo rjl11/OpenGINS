@@ -33,6 +33,15 @@ class LinkTest(unittest.TestCase):
         self.assertEqual(len(want), 2 * (5 + fl.FLOW_LEN + 2))
         self.assertEqual(fl.frame(fl.MSG_FLOW, EXAMPLE.payload()).hex(), want)
 
+    def test_time_examples_match_header(self):
+        req = fl.frame(fl.MSG_TIME_REQ, fl.time_req_payload(7))
+        self.assertEqual(req.hex(), fl.example_hex_from_header(HEADER, "FLOW_LINK_EXAMPLE_TIME_REQ_HEX"))
+        resp = fl.frame(fl.MSG_TIME_RESP, fl.time_resp_payload(7, 42, 0x1234567890))
+        self.assertEqual(resp.hex(), fl.example_hex_from_header(HEADER, "FLOW_LINK_EXAMPLE_TIME_RESP_HEX"))
+        msgs, _ = fl.parse(req + resp)
+        self.assertEqual(fl.time_req_from_payload(msgs[0][1]), 7)
+        self.assertEqual(fl.time_resp_from_payload(msgs[1][1]), (7, 42, 0x1234567890))
+
     def test_parse_round_trip_with_noise(self):
         f = fl.frame(fl.MSG_FLOW, EXAMPLE.payload())
         bad = bytearray(f)

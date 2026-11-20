@@ -159,6 +159,7 @@ Read 2026-11-13. None of these items changes the target configuration; they are 
 | Rover mode | `MODE ROVER SURVEY` | same | same | The manual's mode for precision agriculture and survey. Set explicitly so a different firmware default doesn't matter |
 | Doppler prediction | `CONFIG PSRVELDRPOS DISABLE` | same | same | No fake fixes into INSLIB, which does its own prediction. On the UM980, `CONFIG` lists it once it is set (either value) and not before (bench results 2026-11-12, UM980 CONFIG listing) |
 | PVT engine | `CONFIG PVTALG MULTI` | same | same | Dual-frequency standalone solution (§4.35, Table 4-45). The default is AUTO (single-frequency with ionospheric estimation) on the UM980 and SINGLE on the UM982, so it is set on both. `CONFIG` lists `PVTALG MULTI` once it is set; with the default, no line appears (seen on the UM980, 2026-11-12) |
+| RTK multipath threshold | `CONFIG RTK MMPL 1` | same | same | The stringent multipath mitigation threshold (§4.44, Table 4-55; default 0). In the indoor rotation test it halved the p95 error and the jumps against the bench unit's default without a clear cost in fix rate or satellites used (bench results 2026-11-18/20). It doesn't make indoor fixes trustworthy, and its cost outdoors with a partial sky view is not yet measured. The UM980 lists it in `CONFIG` once set; on the UM982 that is unknown, so a missing line is set in RAM on entering Run, as for PSRVELDRPOS, and only a wrong value counts as a mismatch. A receiver provisioned before this item (the bench unit) therefore gets it in RAM at every boot, not saved, until it is provisioned again |
 | PPS | `CONFIG PPS ENABLE GPS POSITIVE 100000 1000 0 0` | same | same | 1 Hz, rising edge, 100 ms wide. `ENABLE` outputs PPS only once time has converged, so there are no edges before time is valid. It keeps pulsing for about 30 s after positioning is lost (§4.32) |
 | Port locks | none: `CONFIG RXTYPE` is never sent | same | same | Risk of bricking. All ports stay at the default AUTO |
 | Baud | `CONFIG COM2 460800`, `CONFIG COM3 460800`, `CONFIG COM1 460800` | same | same | COM1 is the Pico's port, so it goes last. A PC on the USB-C (COM3) or on the COM2 pins finds the receiver at a known rate |
@@ -196,7 +197,7 @@ Logs:
    1. `UNLOG` (quiets the current port), then `FRESET`. Switch UART1 to 115200.
    2. Wait **15 s**. Then send `VERSIONB` every 1 s until the receiver answers (error after 60 s).
    3. `CONFIG SIGNALGROUP` with the mode's value, and wait for the OK. Wait **15 s**, then probe until the receiver answers; this works whether or not it rebooted. Send `CONFIG` and check that it shows the new signal group.
-   4. `UNLOG COM1`, `UNLOG COM2`, `UNLOG COM3`, `MODE ROVER SURVEY`, `CONFIG PSRVELDRPOS DISABLE`, `CONFIG PVTALG MULTI`, `CONFIG PPS ENABLE GPS POSITIVE 100000 1000 0 0`, and in UM982 dual `CONFIG HEADING VARIABLELENGTH`. Wait for each OK.
+   4. `UNLOG COM1`, `UNLOG COM2`, `UNLOG COM3`, `MODE ROVER SURVEY`, `CONFIG PSRVELDRPOS DISABLE`, `CONFIG PVTALG MULTI`, `CONFIG RTK MMPL 1`, `CONFIG PPS ENABLE GPS POSITIVE 100000 1000 0 0`, and in UM982 dual `CONFIG HEADING VARIABLELENGTH`. Wait for each OK.
    5. `CONFIG COM2 460800`, `CONFIG COM3 460800`, and `CONFIG COM1 460800` last. The COM1 reply is expected at the old baud (verify on the bench). After it, switch UART1 to 460800, wait 100 ms and probe with `VERSIONB`.
    6. `BESTNAVB COM1 0.05`, `STADOPB COM1 1`, `HWSTATUSB COM1 1`, and in UM982 dual `UNIHEADINGB COM1 0.05`.
    7. `SAVECONFIG` and wait for the OK.
@@ -287,7 +288,7 @@ Not done yet:
 2. **Power-cycle:** the fast path passes, no `FRESET` is sent, and BESTNAVB arrives at 20 Hz (UNIHEADINGB too in dual).
 3. **Change one setting by hand** (e.g. `CONFIG COM1 115200` + `SAVECONFIG`). On the next boot it is detected and re-provisioned.
 4. **`CONFIG` and `UNILOGLIST`:**
-   - UM980 single: SIGNALGROUP 2, COM1/2/3 at 460800, no RXTYPE lock, the PPS line, PSRVELDRPOS DISABLE and PVTALG MULTI; three logs.
+   - UM980 single: SIGNALGROUP 2, COM1/2/3 at 460800, no RXTYPE lock, the PPS line, PSRVELDRPOS DISABLE, PVTALG MULTI and RTK MMPL 1; three logs.
    - UM982 single: SIGNALGROUP 3 6 (4 5 below build 10979), PVTALG MULTI; no UNIHEADINGB; three logs; BESTNAVB at 20 Hz.
    - UM982 dual: SIGNALGROUP 3 6 (4 5 below build 10979), PVTALG MULTI, HEADING VARIABLELENGTH; four logs.
    - Two more logs each with the Zero 2 W companion (`GPRMC` and `GPZDA` on COM2).
@@ -366,7 +367,7 @@ Written 2026-11-16, not yet run.
 
 **Rotation instead of one setting per night** (chosen 2026-11-18, when the bench had about 35 h free): the settings take turns in 45 min blocks, shuffled in each cycle, so each samples the same mix of satellite geometry and time of day, and a night-to-night difference can't pose as a setting's effect. `firmware/tools/rtk_settings_test.py` runs on miniPi straight on the receiver's USB-C (COM3, 115200), without the Pico or the bridge. At each block it sets all four values explicitly (`CONFIG RTK RELIABILITY`, `CONFIG RTK CN0THD`, `CONFIG RTK MMPL`, `MASK`) and sends `CONFIG RTK RESET`. It forwards CRC-checked RTCM frames from rtkbase and logs BESTNAVA at 5 Hz and RTKSTATUSA at 1 Hz. Nothing is saved; a `RESET` at the end restores the saved configuration. The configurations are run A's baseline (`base`: `3 1`, 0, 0, 5°), `rel4` (`4 1`), `adr3` (`3 3`), `mmpl`, `cn0`, `mask15`, and `strict` (`4 3`, CN0THD 1, MMPL 1, 15°), which replaces run G because the helpful ones aren't known in advance. `firmware/tools/rtk_settings_analyze.py` computes the figures above per setting. It takes the reference from the median of all the run's fixed epochs and also counts the blocks that start already fixed, which would show that `CONFIG RTK RESET` doesn't clear a fix.
 - **Dry run (2026-11-18, two 2 min blocks):** the UM980 (R4.10Build25621) accepts every command with OK, `CONFIG` then lists `RTK RELIABILITY`, `RTK MMPL`, `RTK CN0THD` and `MASK 15.0`, and also `CONFIG RTK RESET` as a line of its own (not saved, so gone after `RESET`). RTCM: 0 bad frames, longest gap 1.0 s. After `RTK RESET` with `strict`, about 40 s of PSRDIFF came before float; with `base` it was float from the first epoch, at a reported sd of 3–5 m.
-- **Long run:** started 2026-11-18 20:22 on miniPi (`~/rtktest/runs/20261118_2021`), set to stop on 2026-11-20 at 07:30, about 46 blocks, roughly 5 h per setting. Results go in a "Bench results" section once it ends.
+- **Long run:** started 2026-11-18 20:22 on miniPi (`~/rtktest/runs/20261118_2021`), ended 2026-11-20 07:30 after 47 blocks (4.5–5.25 h per setting) with `RESET` OK. Results in "Bench results (2026-11-18/20, UM980 RTK settings rotation)" below: only `CONFIG RTK MMPL 1` is kept.
 
 ## Bench results (2026-11-06, UM982 module on a PC over USB-C)
 The module was connected to a PC through its USB-C port (CH340 USB-serial bridge, Windows COM10). Only read-only queries and one-shot logs were sent, and nothing was saved. The antennas weren't connected or had no sky view: BESTNAV and UNIHEADING reported `INSUFFICIENT_OBS`, so heading, rate and fix tests are still open.
@@ -628,6 +629,29 @@ Same UM980 (R4.10Build25621) on miniPi's USB, the Pico 2 W on dietpi. `firmware/
 - **Two driver bugs found and fixed:** VERSIONB carries only `25621` as the version (the build was read as 0, so the receiver was treated as unsupported), and UNILOGLIST entries contain a tab (the line reader dropped them, so the log check never passed). Both are in "Identify" and "Reference: UM98x replies and timings".
 - **With both fixed:** the Pico provisioned the receiver (FRESET … SAVECONFIG, RESET). After the restart it found the receiver at 460800 and reported "configuration already matches, nothing written", then ran at 20 Hz BESTNAVB with 0 CRC errors and a single fix.
 - **Left on the receiver:** the swapped saved config (logs on COM3, COM3 at 115200, COM1/COM2 at 460800). `UNLOG COM3` + `SAVECONFIG`, or `FRESET`, undoes it.
+
+## Bench results (2026-11-18/20, UM980 RTK settings rotation)
+The run from "Bench procedure: rejecting bad RTK fixes" above: UM980 R4.10Build25621 on miniPi over COM3 at 115200, antenna indoors, RTCM from rtkbase, 47 blocks of 45 min from 2026-11-18 20:22 to 2026-11-20 07:30 (`~/rtktest/runs/20261118_2021` on miniPi, per-block figures in `blocks.csv` there). RTCM: 0 bad frames, no drops, longest gap 7.6 s; 0 CRC errors in the logged lines.
+
+**Reference:** the antenna measured 3 m east and 1 m down from the rtkbase antenna (tape, so good to some decimetres; estimate, not yet checked), from the base's 1006 position: 58.093670630° N, 12.916778804° E, 147.205 m ellipsoidal. The rover's RTK fixes are relative to those same base coordinates, so the datum doesn't matter. The median of all fixed epochs is 0.70 m east, 0.26 m south and 0.26 m below it. Wrong fix here means an episode more than 0.5 m off (looser than the procedure's 0.2 / 0.3 m, for the tape offset).
+
+`python3 rtk_settings_analyze.py runs/20261118_2021 --ref 58.093670630,12.916778804,147.205 --wrong-h 0.5 --wrong-v 0.5 --blocks`:
+
+| Setting | Blocks | Hours | Fixed % | Wrong-fix min (of fixed) | Jumps > 0.3 m per h | Fixed error < 3 sd | Fixed error p95 | Float error p95 | Median sats used |
+|---|---|---|---|---|---|---|---|---|---|
+| `base` (`3 1`, 5°) | 7 | 5.25 | 49.0 | 152 (99 %) | 19.4 | 0 % | 6.8 m | 6.3 m | 17 |
+| `adr3` (`3 3`) | 7 | 5.25 | 53.9 | 170 (100 %) | 10.1 | 0 % | 7.1 m | 7.1 m | 17 |
+| `rel4` (`4 1`) | 6 | 4.50 | 46.2 | 112 (90 %) | 7.6 | 0 % | 7.6 m | 7.7 m | 17 |
+| `mmpl` (MMPL 1) | 6 | 4.50 | 46.1 | 124 (100 %) | 8.0 | 0 % | 3.6 m | 3.6 m | 17 |
+| `cn0` (CN0THD 1) | 7 | 5.25 | 63.4 | 200 (100 %) | 11.0 | 1.5 % | 6.7 m | 6.8 m | 18 |
+| `mask15` (15°) | 7 | 5.25 | 37.5 | 118 (100 %) | 15.0 | 0 % | 13.4 m | 3.3 m | 15 |
+| `strict` (all) | 7 | 5.09 | 59.0 | 180 (100 %) | 8.1 | 0 % | 6.9 m | 3.2 m | 16 |
+
+- **Indoors, nearly every fix is wrong, whatever the setting.** All but a few minutes of the fixed time sits more than 0.5 m from the antenna, and the fixed positions spread over several metres (after 34 blocks, in 1 m bins, the biggest group held only 22 % of fixed epochs, most of them 1–5 m low). The wrong-fix counts lean on the tape offset, but the p95 errors of 3.6–13 m and the sd test don't: the receiver reports a few cm while it is metres off, and its sd covers the error in at most 1.5 % of fixed epochs. Float epochs are honest about 45–70 % of the time.
+- **The fixed share varies far more between blocks of one setting (2–86 %) than between settings.** Settings that fix more often (`cn0`, `strict`) just give more wrong fixes; `mask15` fixes least and is no more right.
+- **`mmpl` is the least bad:** the smallest p95 error (3.6 m against 6.8 m for `base`) and less than half the jumps. `rel4` and `strict` also halve the jumps. None makes a fix trustworthy indoors.
+- **`CONFIG RTK RESET` doesn't reliably drop a fix:** 27 of 47 blocks were already fixed at their first epoch, so the time to first fix figures don't mean much. A clean restart needs something stronger (for example `CONFIG RTK DISABLE` then `CONFIG RTK USER_DEFAULTS`, not tried).
+- **Decision:** by the procedure's rule (a setting must remove most wrong fixes) none qualifies. `CONFIG RTK MMPL 1` was added to the target configuration anyway on 2026-11-20 (the user's call), as the least bad with no cost seen: see the target table. With this sky view the receiver's own sd can't flag a bad fix, so rejecting them falls to INSLIB (the open INSLIB question in `TODO.md`). `mmpl`, `rel4` and `base` are worth comparing once more outdoors with a partial sky view (trees, a building edge), where a correct fix exists and the fix rate matters.
 
 ## Reference: UM98x replies and timings
 From the AgOpenWeb-HAT daemon (https://github.com/chriskinal/AgOpenWeb-HAT, `core/src/um98x.cpp` and `core/include/aow/um98x.h`, commit `e4bd9ef`, read 2026-11-10; ported from the AiO New Dawn firmware, GPL v3). It reads and writes UM981/UM982 settings on real receivers. These are facts from its code, to confirm on our module; no code is taken.

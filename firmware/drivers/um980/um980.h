@@ -13,8 +13,9 @@
  *    (plans/gnss-um98x-config.md).
  *
  * The driver uses only COM1 and never sends CONFIG RXTYPE.
- * All writes to the port go through um980_send_line(), the single owner of
- * UART1 TX. RTCM forwarding will go through the same place.
+ * All writes to the port go through um980_send_line() and um980_send_rtcm(),
+ * the only owners of UART1 TX; both queue whole messages into the TX ring,
+ * so a command and an RTCM frame never interleave.
  *
  * Runs on core 0. Not thread safe. One receiver. Error codes are below -100.
  */
@@ -22,6 +23,7 @@
 #define UM980_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "uart_dma.h"
@@ -146,6 +148,8 @@ typedef struct {
     float    hdop;          /* from STADOP                                  */
     float    pdop;
     bool     dop_valid;
+    uint32_t rtcm_frames;   /* RTCM frames queued for COM1                  */
+    uint32_t rtcm_dropped;  /* refused: not in RUN, or the TX ring full     */
 } um980_stats_t;
 
 #define UM980_FRAME_MAX     1024u
@@ -197,6 +201,7 @@ typedef struct {
     uint32_t  cfg_seen;      /* target items found in the CONFIG reply       */
     bool      cfg_bad;       /* an item is present with another value        */
     bool      psrvel_listed;
+    bool      mmpl_listed;
     bool      mode_ok;
     int       log_count;     /* count line of UNILOGLIST, -1 = not seen      */
     int       log_lines;
@@ -226,8 +231,14 @@ bool um980_take_heading(um980_t *g, um980_heading_t *out);
 /* Starts detection and provisioning again (the "Reconfigure GNSS" action). */
 void um980_reconfigure(um980_t *g);
 
-/* Queues one command line (CR LF is added). The single owner of UART1 TX. */
+/* Queues one command line (CR LF is added). */
 bool um980_send_line(um980_t *g, const char *line);
+
+/* Queues one whole RTCM frame for COM1 (plans/rtcm-over-bluetooth.md).
+ * Accepted only in state RUN, so corrections never mix into detection or
+ * provisioning; false (nothing queued) otherwise or when the TX ring is
+ * full. Counted in um980_stats(): rtcm_frames, rtcm_dropped. */
+bool um980_send_rtcm(um980_t *g, const uint8_t *frame, size_t len);
 
 static inline um980_state_t um980_state(const um980_t *g) { return g->state; }
 static inline const um980_stats_t *um980_stats(const um980_t *g) { return &g->stats; }

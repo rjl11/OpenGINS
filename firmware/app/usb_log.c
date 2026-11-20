@@ -9,6 +9,7 @@
 #include "pico/time.h"
 #include "tusb.h"
 
+#include "field_io.h"
 #include "flow_link.h"
 #include "paogi.h"
 
@@ -31,7 +32,8 @@ static uint32_t s_ring_max;
 static uint32_t s_sent, s_sent_prev, s_bps;
 static uint64_t s_next_sec, s_disc_since, s_last_send;
 
-static char s_cmd[32];
+/* Holds "flow " and the hex of the longest link frame. */
+static char s_cmd[8u + 2u * (FLOW_LINK_HEADER_LEN + FLOW_LINK_MAX_PAYLOAD + FLOW_LINK_CRC_LEN)];
 static unsigned s_cmd_n;
 
 /* SPEED_EDGES batch being filled. */
@@ -189,9 +191,34 @@ static void log_set(bool on)
     }
 }
 
-static void command(const char *c)
+static int hex_nibble(char c)
 {
-    if (strcmp(c, "log on") == 0) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* "flow <hex>": a flow-link frame from the Pi on USB (field_io.h). Quiet,
+ * at up to 100 lines a second; the status report counts them. */
+static void flow_line(const char *hex, uint64_t t)
+{
+    uint8_t b[FLOW_LINK_HEADER_LEN + FLOW_LINK_MAX_PAYLOAD + FLOW_LINK_CRC_LEN];
+    size_t n = 0;
+    for (; hex[0] != '\0' && hex[1] != '\0' && n < sizeof b; hex += 2) {
+        int hi = hex_nibble(hex[0]), lo = hex_nibble(hex[1]);
+        if (hi < 0 || lo < 0) break;
+        b[n++] = (uint8_t)(hi << 4 | lo);
+    }
+    if (hex[0] != '\0') n = 0; /* odd length, junk or too long: counted as bad */
+    field_io_usb_flow(b, n, t);
+}
+
+static void command(const char *c, uint64_t t)
+{
+    if (strncmp(c, "flow ", 5) == 0) {
+        flow_line(c + 5, t);
+    } else if (strcmp(c, "log on") == 0) {
         log_set(true);
     } else if (strcmp(c, "log off") == 0) {
         log_set(false);
@@ -220,7 +247,7 @@ static bool read_commands(void)
             char ch = buf[i];
             if (ch == '\r' || ch == '\n') {
                 s_cmd[s_cmd_n] = '\0';
-                command(s_cmd);
+                command(s_cmd, time_us_64());
                 s_cmd_n = 0;
             } else if (s_cmd_n < sizeof s_cmd - 1u) {
                 s_cmd[s_cmd_n++] = ch;
@@ -273,11 +300,14 @@ void usb_log_init(void)
 
 bool usb_log_poll(uint64_t now)
 {
-    /* Commands are rare; each read takes the USB driver's mutex. */
+    /* Every 1 ms: the SDK's CDC receive buffer is only 64 bytes, and the
+     * "flow <hex>" lines (76 bytes, up to 100 a second) need about 8 kB/s;
+     * at 20 ms the host's writes blocked about 30 ms each. A read takes the
+     * USB driver's mutex only when something is waiting. */
     static uint64_t s_next_cmd;
     bool worked = false;
     if (now >= s_next_cmd) {
-        s_next_cmd = now + 20000u;
+        s_next_cmd = now + 1000u;
         worked = read_commands();
     }
     if (s_on) {

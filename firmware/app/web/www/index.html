@@ -94,7 +94,7 @@ function posCard(p){
     rows.map(([k,v])=>'<i>'+E(k)+' <b>'+E(v)+'</b></i>').join("")+'</div></div>';
 }
 function sensors(d){
-  const o=[],i=d.imu,g=d.gnss,b=d.baro,m=d.mag,s=d.speed,fl=d.flow,w=d.wifi,pl=d.pole,h=d.heading,c=d.calib;
+  const o=[],i=d.imu,g=d.gnss,b=d.baro,m=d.mag,s=d.speed,fl=d.flow,w=d.wifi,e=d.eth,pl=d.pole,h=d.heading,c=d.calib;
   if(i)o.push(i.state==="run"&&i.error==="ok"?chip("ok","IMU","OK",i.rate_hz+" Hz"+(has(i.temp_c)?" · "+f(i.temp_c,0,"°C"):"")):
     chip(i.state==="error"||(i.error&&i.error!=="ok")?"bad":"warn","IMU",i.state,i.error!=="ok"?i.error:"starting"));
   else o.push(chip("bad","IMU","—"));
@@ -113,6 +113,8 @@ function sensors(d){
     chip(fl.frames_hz>0?"ok":"warn","Optical flow",fl.frames_hz>0?"OK":"no frames",f(fl.frames_hz,0," fps")+(has(fl.features)?" · "+fl.features+" feat":"")));
   if(w)o.push(chip(w.state==="up"||w.state==="ap"?"ok":"warn","Wi-Fi",w.state==="ap"?"AP":w.state,
     w.state==="ap"?(w.ap_clients||0)+" client(s)":has(w.rssi_dbm)?w.rssi_dbm+" dBm":w.ssid||""));
+  if(e&&e.state!=="off")o.push(e.state==="up"?chip(e.paogi_errors>e.paogi_sent/100?"warn":"ok","Ethernet","up",e.ip+(has(e.rtcm_age_ms)&&e.rtcm_age_ms<3000?" · RTCM in":"")):
+    chip(e.state==="not_found"?"bad":"warn","Ethernet",e.state==="not_found"?"missing":"no link",e.state==="not_found"?"W5500 not answering":"no cable"));
   if(pl)o.push(chip(pl.state==="held"?"ok":pl.state==="planted"?"warn":"off","Pole",pl.state,pl.plants+" plants · "+pl.yaw_fits+" yaw fits"));
   if(c){const k=["gyro_bias","accelerometer","magnetometer","gyro_matrix"],n=k.filter(x=>String(c[x]||"").startsWith("in use")).length;
     o.push(chip(c.imu_id!=="ok"?"warn":n?"ok":"off","Calibration",n+" / 4 in use",c.imu_id==="ok"?(c.still?"still":"moving"):"IMU id "+c.imu_id));}

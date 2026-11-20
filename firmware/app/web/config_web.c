@@ -8,6 +8,7 @@
 #include "app_config.h"
 #include "imu_calib.h"
 #include "pole_mount.h"
+#include "rtcm_src.h"
 #include "jsonw.h"
 #include "web.h"
 
@@ -132,7 +133,34 @@ static const float_field_t k_onoff[] = {
     FF("sensor_mag", sensor_mag),
     FF("sensor_flow", sensor_flow),
     FF("sensor_wheel", sensor_wheel),
+    FF("eth_fitted", eth_fitted),
 };
+
+/* IPv4 addresses as dotted quads, uint8_t[4] in settings_t. */
+static const float_field_t k_ipv4[] = {
+    FF("eth_ip", eth_ip),
+    FF("eth_mask", eth_mask),
+    FF("eth_gw", eth_gw),
+};
+
+static bool parse_ipv4(const char *v, uint8_t out[4])
+{
+    uint8_t b[4];
+    for (int i = 0; i < 4; i++) {
+        char *end;
+        if (*v < '0' || *v > '9') {
+            return false;
+        }
+        unsigned long x = strtoul(v, &end, 10);
+        if (x > 255 || end - v > 3 || (i < 3 && *end != '.') || (i == 3 && *end != '\0')) {
+            return false;
+        }
+        b[i] = (uint8_t)x;
+        v = end + 1;
+    }
+    memcpy(out, b, 4);
+    return true;
+}
 
 /* Applies one form field to s. NULL, or an error message in err. */
 static const char *apply_field(settings_t *s, const char *key, const char *val, char *err,
@@ -156,6 +184,25 @@ static const char *apply_field(settings_t *s, const char *key, const char *val, 
             else { snprintf(err, cap, "%s: on or off", key); return err; }
             return NULL;
         }
+    }
+    for (size_t i = 0; i < sizeof k_ipv4 / sizeof k_ipv4[0]; i++) {
+        if (strcmp(key, k_ipv4[i].key) == 0) {
+            if (!parse_ipv4(val, (uint8_t *)s + k_ipv4[i].offset)) {
+                snprintf(err, cap, "%s: an IPv4 address like 192.168.5.124", key);
+                return err;
+            }
+            return NULL;
+        }
+    }
+    if (strcmp(key, "rtcm_src") == 0) {
+        for (unsigned m = RTCM_SRC_MODE_AUTO; m <= RTCM_SRC_MODE_BT; m++) {
+            if (strcmp(val, rtcm_src_mode_name(m)) == 0) {
+                s->rtcm_src = (uint8_t)m;
+                return NULL;
+            }
+        }
+        snprintf(err, cap, "rtcm_src: auto, ethernet or bluetooth");
+        return err;
     }
     if (strcmp(key, "antenna") == 0) {
         if (strcmp(val, "single") == 0) s->antenna_dual = 0;
@@ -377,6 +424,15 @@ static void settings_obj(jw_t *w, const char *key, const settings_t *s)
     jw_str(w, "sensor_mag", s->sensor_mag ? "on" : "off");
     jw_str(w, "sensor_flow", s->sensor_flow ? "on" : "off");
     jw_str(w, "sensor_wheel", s->sensor_wheel ? "on" : "off");
+    jw_str(w, "eth_fitted", s->eth_fitted ? "on" : "off");
+    const char *rs = rtcm_src_mode_name(s->rtcm_src);
+    jw_str(w, "rtcm_src", rs ? rs : "auto");
+    static const char *const k_ip_keys[] = { "eth_ip", "eth_mask", "eth_gw" };
+    const uint8_t *const ips[] = { s->eth_ip, s->eth_mask, s->eth_gw };
+    for (int i = 0; i < 3; i++) {
+        snprintf(t, sizeof t, "%u.%u.%u.%u", ips[i][0], ips[i][1], ips[i][2], ips[i][3]);
+        jw_str(w, k_ip_keys[i], t);
+    }
     const char *hs = settings_height_src_name(s->height_src);
     jw_str(w, "height_src", hs ? hs : "auto");
     jw_str(w, "antenna", s->antenna_dual ? "dual" : "single");

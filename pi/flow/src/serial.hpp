@@ -18,6 +18,9 @@ public:
     void open(const std::string& path, unsigned baud);
     // Writes everything; returns false on an error (the caller counts it).
     bool write_all(const uint8_t* p, size_t n);
+    // Waits up to timeout_ms for input; returns the bytes read, 0 on a
+    // timeout, -1 on an error (the port went away).
+    long read_some(uint8_t* p, size_t cap, int timeout_ms);
 
 private:
     int fd_ = -1;

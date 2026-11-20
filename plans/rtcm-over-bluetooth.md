@@ -55,7 +55,7 @@ Both fit easily in BLE throughput with a 247-byte MTU. RTCM arrives in arbitrary
 - **If Bluetooth drops:**
   1. Corrections stop.
   2. After its correction-age timeout, the UM980 drops to float, then single.
-  3. The fix quality in our GGA follows automatically (and in `$PAOGI`, once Ethernet is back from on hold).
+  3. The fix quality in our GGA follows automatically (and in `$PAOGI`, on USB and Ethernet).
   4. The filter keeps running.
 - **Diagnostics page** ([web-config-server.md](web-config-server.md)):
   - Bluetooth connected, and whether it's BLE or SPP.

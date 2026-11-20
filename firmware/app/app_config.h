@@ -415,6 +415,30 @@
 #define APP_SENSOR_FLOW             1
 #define APP_SENSOR_WHEEL            1
 
+/* W5500 Ethernet (app/eth.h, plans/ethernet-w5500-agopenweb.md): the
+ * defaults of the web page's "Ethernet fitted" switch and static IPv4
+ * settings. Off by default: the W5500 is an option, and with it off its
+ * pins are left alone. 192.168.5.124 is the AgOpenGPS GPS-module address.
+ * $PAOGI goes to the subnet broadcast on APP_ETH_PAOGI_PORT (AgOpenWeb's
+ * module port); RTCM from AgOpenWeb's NTRIP client is received on
+ * APP_ETH_RTCM_PORT, unicast and broadcast. */
+#define APP_ETH_FITTED              0
+#define APP_ETH_IP                  { 192, 168, 5, 124 }
+#define APP_ETH_MASK                { 255, 255, 255, 0 }
+#define APP_ETH_GW                  { 192, 168, 5, 1 }
+#define APP_ETH_PAOGI_PORT          9999u
+#define APP_ETH_RTCM_PORT           2233u
+/* The front camera unit (plans/front-camera-unit.md): flow_link frames, one
+ * per datagram, to this port. */
+#define APP_ETH_FRONT_PORT          5800u
+/* RTCM correction sources (app/rtcm_src.h): in auto, the source in use is
+ * kept until it has sent nothing for this long, then the next one to
+ * deliver takes over. An estimate: longer than a caster's usual 1 s
+ * cadence and a short dropout, short enough to fail over before the
+ * receiver's own correction timeout. */
+#define APP_RTCM_SRC_HOLD_S         5u
+#define APP_ETH_SPI_HZ              30000000u
+
 /* Flow into INSLIB (app/flow_nav.h): the Pi's flow becomes a ground speed on
  * core 0 and goes to INSLIB's speed input while the flow sensor is on. The
  * height, image yaw and lever arm below are the defaults of the web page's
@@ -430,7 +454,16 @@
  *                  error is a slowly changing scale, not white noise)
  *  MIN_SD / MAX    floor of the 1-sigma, and the fastest speed believed [m/s]
  *  MAX_TILT_DEG    steeper roll or pitch: the ground is not under the lens
- *  MIN_FEATURES    fewer tracked features: the frame is not used */
+ *  MIN_FEATURES    fewer tracked features: the frame is not used
+ *  FREE_LATENCY    free-running camera (no trigger wired, or frames sent on
+ *                  USB for bench tests): exposure middle to the earliest
+ *                  arrival at the Pico [us] (flow_nav.h; estimate, not yet
+ *                  measured: readout, flow and the link)
+ *  SYNC_TS_TO_MID  clock-synced front camera unit (app/clock_sync.h): from
+ *                  the unit's frame timestamp to the exposure middle [us],
+ *                  signed. 0 until measured (plans/front-camera-unit.md,
+ *                  "Verification": the residual of the flow speed against
+ *                  RTK over an added delay) */
 #define APP_FLOW_HEIGHT_M           1.0f
 #define APP_FLOW_HEIGHT_REL_SD      0.05f
 #define APP_FLOW_CAM_YAW_DEG        0.0f
@@ -444,6 +477,8 @@
 #define APP_FLOW_MAX_MPS            20.0f
 #define APP_FLOW_MAX_TILT_DEG       30.0f
 #define APP_FLOW_MIN_FEATURES       15u
+#define APP_FLOW_FREE_LATENCY_US    8000u
+#define APP_FLOW_SYNC_TS_TO_MID_US  0
 
 /* Wheel / ground-speed pulses (plans/wheel-odometry-aiding.md). The internal
  * pull-up suits an open-collector output (opto stage, Hall sensor). The raw

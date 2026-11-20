@@ -3,9 +3,11 @@
 
     python3 rtk_settings_analyze.py runs/20261118_2130 [--blocks] [--csv blocks.csv]
 
-The antenna doesn't move, so the reference is the median of all fixed epochs
-of the run (refined once: the median of the fixed epochs within 0.5 m of the
-first median). Definitions, from "Bench procedure: rejecting bad RTK fixes" in
+The antenna doesn't move, so the reference is its measured position when
+given (--ref, for example from RTK on a clear-sky point and a measured offset),
+else the median of all fixed epochs of the run (refined once: the median of the
+fixed epochs within 0.5 m of the first median). Indoors the median can land
+among wrong fixes (seen 2026-11-19), so use --ref whenever there is one. Definitions, from "Bench procedure: rejecting bad RTK fixes" in
 plans/gnss-um98x-config.md:
   fixed       pos type NARROW_INT, WIDE_INT or L1_INT
   episode     consecutive fixed epochs (no gap over 1 s)
@@ -73,7 +75,7 @@ def load_block(path):
                 f2 = body.split(";", 1)[1].split("*")[0].split(",")
                 if body.startswith("#BESTNAVA"):
                     try:
-                        epochs.append(dict(t=t, type=f2[1], lat=float(f2[2]), lon=float(f2[3]), hgt=float(f2[4]),
+                        epochs.append(dict(t=t, type=f2[1], lat=float(f2[2]), lon=float(f2[3]), hgt=float(f2[4]), und=float(f2[5]),
                                            sdn=float(f2[7]), sde=float(f2[8]), sdu=float(f2[9]),
                                            age=float(f2[11]), ntrk=int(f2[13]), nused=int(f2[14])))
                     except (IndexError, ValueError):
@@ -176,6 +178,9 @@ def main():
     ap.add_argument("--wrong-h", type=float, default=0.2)
     ap.add_argument("--wrong-v", type=float, default=0.3)
     ap.add_argument("--jump", type=float, default=0.3)
+    ap.add_argument("--ref", help="measured antenna position: lat,lon,h (degrees WGS84, metres)")
+    ap.add_argument("--ref-height", choices=("ell", "msl"), default="ell",
+                    help="--ref h is ellipsoidal (default) or the receiver's MSL height (BESTNAV hgt)")
     ap.add_argument("--blocks", action="store_true", help="also print one line per block")
     ap.add_argument("--csv", help="write the per-block figures to this CSV")
     a = ap.parse_args()
@@ -185,8 +190,21 @@ def main():
     blocks = [b for b in blocks if b["epochs"]]
     if not blocks:
         sys.exit("no epochs found")
-    ref, nref = reference(blocks)
-    print(f"{len(blocks)} blocks, reference from {nref} epochs: lat {ref[0]:.9f} lon {ref[1]:.9f} h {ref[2]:.3f} m")
+    if a.ref:
+        lat, lon, h = (float(x) for x in a.ref.split(","))
+        if a.ref_height == "ell":
+            # BESTNAV hgt is above MSL with the receiver's own undulation: h_msl = h_ell - undulation
+            und = statistics.median(e["und"] for b in blocks for e in b["epochs"])
+            h -= und
+        ref = (lat, lon, h)
+        print(f"{len(blocks)} blocks, measured reference: lat {lat:.9f} lon {lon:.9f} h {h:.3f} m (MSL as BESTNAV)")
+        med, _ = reference(blocks)
+        if med:
+            de, dn, du = enu(dict(lat=med[0], lon=med[1], hgt=med[2]), ref)
+            print(f"  median of the fixed epochs is {de:+.3f} E {dn:+.3f} N {du:+.3f} U m from it")
+    else:
+        ref, nref = reference(blocks)
+        print(f"{len(blocks)} blocks, reference from {nref} epochs: lat {ref[0]:.9f} lon {ref[1]:.9f} h {ref[2]:.3f} m")
     stats = [block_stats(b, ref, a) for b in blocks]
 
     if a.blocks:

@@ -23,7 +23,12 @@
  *   GP13  GPIO in   <- speed input B: quadrature encoder B (unused for one Hall)
  *                      (both behind an opto-isolated 12 V input stage,
  *                      plans/wheel-odometry-aiding.md)
- *   GP16-21        reserved: SPI0 for the W5500 (on hold)
+ *   GP16  SPI0 RX   <- W5500 MISO   (Ethernet, when fitted)
+ *   GP17  GPIO out  -> W5500 CS
+ *   GP18  SPI0 SCK  -> W5500 SCLK
+ *   GP19  SPI0 TX   -> W5500 MOSI
+ *   GP20  GPIO out  -> W5500 RSTn
+ *   GP21  GPIO in   <- W5500 INTn   (not used yet, polled)
  *   GP22            reserved: web-mode switch (plans/web-config-server.md)
  *   GP23/24/25/29   used by the CYW43439 on the Pico 2 W
  *
@@ -34,6 +39,7 @@
 #define BOARD_PINS_H
 
 #include "hardware/i2c.h"
+#include "hardware/spi.h"
 #include "hardware/uart.h"
 
 /* TM210 IMU on UART0 (plans/imu-tm210.md). */
@@ -67,9 +73,19 @@
 #define PIN_SPEED_A           12
 #define PIN_SPEED_B           13
 
-/* Reserved, not used by this build. Do not assign them to anything else. */
-#define PIN_W5500_SPI_FIRST   16
-#define PIN_W5500_SPI_LAST    21
+/* W5500 Ethernet on SPI0 (plans/ethernet-w5500-agopenweb.md), the pins of
+ * WIZnet's W5500-EVB-Pico. Driven only while the web setting "Ethernet
+ * fitted" is on; otherwise left as inputs. Do not assign them to anything
+ * else. */
+#define PIN_W5500_SPI         spi0
+#define PIN_W5500_MISO        16
+#define PIN_W5500_CS          17
+#define PIN_W5500_SCK         18
+#define PIN_W5500_MOSI        19
+#define PIN_W5500_RST         20
+#define PIN_W5500_INT         21
+
+/* Reserved, not used by this build. Do not assign it to anything else. */
 #define PIN_WEB_MODE_SWITCH   22
 
 #endif /* BOARD_PINS_H */

@@ -401,6 +401,16 @@ bool um980_send_line(um980_t *g, const char *line)
     return uart_dma_write(g->port, b, (size_t)n);
 }
 
+bool um980_send_rtcm(um980_t *g, const uint8_t *frame, size_t len)
+{
+    if (g->state != UM980_ST_RUN || !uart_dma_write(g->port, frame, len)) {
+        g->stats.rtcm_dropped++;
+        return false;
+    }
+    g->stats.rtcm_frames++;
+    return true;
+}
+
 bool um980_take_heading(um980_t *g, um980_heading_t *out)
 {
     if (!g->hdg_new) {

@@ -96,15 +96,42 @@ static struct {
 } s_fl;
 static flow_io_stats_t s_fst;
 static bool s_link_ok;
+/* Frames that came on USB (field_io_usb_flow), for bench tests. */
+static struct {
+    uint32_t frames, bad;
+    uint64_t t_last;
+} s_fu;
 
 /* Flow to speed (flow_nav.h) and on to core 1. */
 static flow_nav_t s_fn;
+static flow_nav_clock_fn s_clock_fn; /* clock sync (field_io_set_clock), re-set after every init */
+static void *s_clock_ctx;
 static struct {
     uint32_t pushed, push_drops; /* this second */
     float    pushed_hz;
     uint32_t to_filter, late, used, skipped; /* core 1's counts (cumulative) */
 } s_fs;
 static uint32_t s_pushed_win;
+
+/* A good link frame, from the PIO UART or from USB. */
+static void flow_frame(const flow_frame_t *f)
+{
+    if (!s_flow_on) return;
+    s_fw.frames++;
+    if (f->type == FLOW_MSG_FLOW && flow_link_decode_flow(f->payload, f->len, &s_fl.last) == 0) {
+        s_fl.have_last = true;
+        flow_nav_speed_t sp;
+        if (flow_nav_message(&s_fn, &s_fl.last, f->t_arrival_us, &sp)) {
+            s_pushed_win++;
+            const nav_speed_t ns = {
+                .t_valid_us = sp.t_valid_us, .speed_mps = sp.speed_mps, .sd_mps = sp.sd_mps,
+                .source = NAV_SPEED_FLOW,
+            };
+            if (!nav_push_speed(&ns)) s_fs.push_drops++;
+        }
+    }
+    usb_log_flow_frame(f);
+}
 
 /* ---- public ------------------------------------------------------------- */
 
@@ -135,11 +162,21 @@ void field_io_init(void)
         .max_mps = APP_FLOW_MAX_MPS,
         .max_tilt_rad = APP_FLOW_MAX_TILT_DEG * 0.017453293f,
         .min_features = APP_FLOW_MIN_FEATURES,
+        .free_latency_us = APP_FLOW_FREE_LATENCY_US,
+        .sync_ts_to_mid_us = APP_FLOW_SYNC_TS_TO_MID_US,
     };
     flow_nav_init(&s_fn, &nc);
+    flow_nav_set_clock(&s_fn, s_clock_fn, s_clock_ctx);
     printf("[field] speed inputs GP%d/GP%d, flow link GP%d %s, trigger GP%d at %u Hz, strobe GP%d\n",
            PIN_SPEED_A, PIN_SPEED_B, PIN_FLOW_RX, s_link_ok ? "on" : "FAILED (no PIO/DMA free)",
            PIN_FLOW_TRIGGER, (unsigned)APP_FLOW_TRIGGER_HZ, PIN_FLOW_STROBE);
+}
+
+void field_io_set_clock(flow_nav_clock_fn fn, void *ctx)
+{
+    s_clock_fn = fn;
+    s_clock_ctx = ctx;
+    flow_nav_set_clock(&s_fn, fn, ctx);
 }
 
 void field_io_apply_settings(const settings_t *s)
@@ -152,6 +189,7 @@ void field_io_apply_settings(const settings_t *s)
              * before the switch. */
             const flow_nav_config_t c = s_fn.cfg;
             flow_nav_init(&s_fn, &c);
+            flow_nav_set_clock(&s_fn, s_clock_fn, s_clock_ctx);
         }
         s_flow_on = flow;
     }
@@ -209,24 +247,32 @@ bool field_io_poll(uint64_t now)
     }
     flow_frame_t f;
     while (flow_io_poll_frame(&f)) {
-        if (!s_flow_on) continue;
-        s_fw.frames++;
-        if (f.type == FLOW_MSG_FLOW && flow_link_decode_flow(f.payload, f.len, &s_fl.last) == 0) {
-            s_fl.have_last = true;
-            flow_nav_speed_t sp;
-            if (flow_nav_message(&s_fn, &s_fl.last, f.t_arrival_us, &sp)) {
-                s_pushed_win++;
-                const nav_speed_t ns = {
-                    .t_valid_us = sp.t_valid_us, .speed_mps = sp.speed_mps, .sd_mps = sp.sd_mps,
-                    .source = NAV_SPEED_FLOW,
-                };
-                if (!nav_push_speed(&ns)) s_fs.push_drops++;
-            }
-        }
-        usb_log_flow_frame(&f);
+        flow_frame(&f);
         worked = true;
     }
     return worked;
+}
+
+bool field_io_usb_flow(const uint8_t *b, size_t n, uint64_t t_arrival_us)
+{
+    if (n < FLOW_LINK_HEADER_LEN + FLOW_LINK_CRC_LEN || b[0] != FLOW_LINK_SYNC0 || b[1] != FLOW_LINK_SYNC1 ||
+        b[2] != FLOW_LINK_VERSION || b[4] > FLOW_LINK_MAX_PAYLOAD ||
+        n != (size_t)FLOW_LINK_HEADER_LEN + b[4] + FLOW_LINK_CRC_LEN) {
+        s_fu.bad++;
+        return false;
+    }
+    const size_t   len = b[4];
+    const uint16_t crc = (uint16_t)(b[FLOW_LINK_HEADER_LEN + len] | (b[FLOW_LINK_HEADER_LEN + len + 1u] << 8));
+    if (flow_link_crc16(&b[2], 3u + len) != crc) {
+        s_fu.bad++;
+        return false;
+    }
+    flow_frame_t f = { .t_arrival_us = t_arrival_us, .type = b[3], .len = (uint8_t)len };
+    memcpy(f.payload, &b[FLOW_LINK_HEADER_LEN], len);
+    s_fu.frames++;
+    s_fu.t_last = t_arrival_us;
+    flow_frame(&f);
+    return true;
 }
 
 void field_io_roll(uint64_t now)
@@ -315,9 +361,14 @@ static void print_flow(void)
             printf(" none yet");
         }
         printf("  %.0f Hz to INSLIB  %s  used %lu/%lu  timing strobe %lu", (double)s_fs.pushed_hz,
-               s_fn.anchored ? "anchored" : "NOT anchored",
+               s_fn.anchored ? "anchored" : ns->untriggered == ns->msgs ? "free-running" : "NOT anchored",
                (unsigned long)ns->used, (unsigned long)ns->msgs, (unsigned long)ns->strobe_timed);
-        if (ns->untriggered) printf("  untriggered %lu", (unsigned long)ns->untriggered);
+        if (ns->untriggered) {
+            printf("  free-running %lu (Pi clock", (unsigned long)ns->untriggered);
+            if (ns->synced) printf(", %lu clock-synced", (unsigned long)ns->synced);
+            printf(")");
+            if (ns->free_resets) printf(" resets %lu", (unsigned long)ns->free_resets);
+        }
         if (ns->not_anchored) printf("  unanchored %lu", (unsigned long)ns->not_anchored);
         if (ns->invalid) printf("  invalid %lu", (unsigned long)ns->invalid);
         if (ns->no_exposure) printf("  no-exposure %lu", (unsigned long)ns->no_exposure);
@@ -398,6 +449,10 @@ void field_io_json(jw_t *w)
     jw_int(w, "strobe_timed", ns->strobe_timed);
     jw_int(w, "not_anchored", ns->not_anchored);
     jw_int(w, "untriggered", ns->untriggered);
+    jw_int(w, "free_resets", ns->free_resets);
+    jw_int(w, "clock_synced", ns->synced);
+    jw_int(w, "usb_frames", s_fu.frames);
+    jw_int(w, "usb_bad", s_fu.bad);
     jw_int(w, "invalid", ns->invalid);
     jw_int(w, "no_exposure", ns->no_exposure);
     jw_int(w, "no_gyro", ns->no_gyro);

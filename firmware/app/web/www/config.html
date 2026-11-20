@@ -82,6 +82,18 @@ button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
 <label><span>offset random walk<small>m/√s, 0 = INSLIB default (0.3)</small></span><input name="offset_rw_mps" inputmode="decimal" data-tip="How fast the offset may drift between pairs (weather, ISA-model error during height changes). Too low and real drift is taken for outliers and followed late; too high and the offset gets noisy."></label>
 <label><span>offset barometer sigma<small>m, 0 = INSLIB default (2 m)</small></span><input name="offset_baro_sd_m" inputmode="decimal" data-tip="Used only with the barometric INS height (with the GNSS height INSLIB's 2 m averages more pairs). The barometer's 1-sigma for each baro/GNSS pair; it sets how sure the offset is. With the barometric INS height the absolute height takes the weather drift back off less one sigma of the offset, so a sigma that is too large stays in it as a bias (INSLIB's 2 m: 1.4 m in a static overnight log; 0.1 m: 0.17 m rms). Too small and real height changes in motion, where the barometer's model error grows, are taken for outliers."></label>
 </section>
+<section><h2>Ethernet (W5500)</h2>
+<p class="note">Wired output to AgOpenWeb / AgOpenGPS: $PAOGI at 10 Hz to the subnet broadcast on UDP 9999, RTCM from its NTRIP client on UDP 2233 to the receiver. Off = no module fitted; its pins are left alone. Applies live.</p>
+<label><span>Ethernet fitted<small>W5500 on SPI0, GP16–21</small></span><select name="eth_fitted"><option value="on">on</option><option value="off">off</option></select></label>
+<label class="eth"><span>IP address<small>static; 192.168.5.124 is the AgOpenGPS GPS module</small></span><input name="eth_ip" inputmode="decimal"></label>
+<label class="eth"><span>subnet mask</span><input name="eth_mask" inputmode="decimal"></label>
+<label class="eth"><span>gateway<small>0.0.0.0 = none</small></span><input name="eth_gw" inputmode="decimal"></label>
+<p class="note">The front camera unit sends its flow to UDP 5800. AgOpenGPS / AgOpenWeb module scans on UDP 8888 are answered.</p>
+</section>
+<section><h2>Corrections (RTCM)</h2>
+<p class="note">Only one source feeds the receiver; the other's frames are dropped. Applies live.</p>
+<label><span>source<small>auto: the first to deliver, until it is silent for 5 s</small></span><select name="rtcm_src"><option value="auto">auto</option><option value="ethernet">Ethernet (AgOpenWeb NTRIP)</option><option value="bluetooth">Bluetooth (phone)</option></select></label>
+</section>
 <section><h2>Wi-Fi</h2>
 <p class="note">Applies after a reboot. The access point OpenGINS is open, at 192.168.4.1.</p>
 <label><span>mode</span><select name="wifi_mode"><option value="auto">auto (AP if no network in 30 s)</option><option value="sta">network only</option><option value="ap">access point only</option></select></label>
@@ -107,6 +119,9 @@ function say(t,c){msg.textContent=t;msg.className=c||"";}
 /* Antenna height over ground: tractor and survey pole only. Hidden, it still posts, so the saved value is kept. */
 function showAntH(){document.getElementById("anth").style.display=/^(tractor|pole)$/.test(f.platform.value)?"":"none";}
 f.platform.addEventListener("change",showAntH);
+/* Ethernet addresses: shown only while Ethernet is fitted; hidden, they still post, so the saved values are kept. */
+function showEth(){for(const l of document.querySelectorAll("label.eth"))l.style.display=f.eth_fitted.value==="on"?"":"none";}
+f.eth_fitted.addEventListener("change",showEth);
 function fill(d){
   cur=d;
   const s=d.settings;
@@ -117,7 +132,7 @@ function fill(d){
     el.classList.remove("changed");
   }
   f.sta_password.value="";pwTouched=false;
-  showAntH();
+  showAntH();showEth();
   document.getElementById("pwnote").textContent=s.sta_password_set?"set; empty = open network":"none (open); empty = open network";
   let src="settings from "+(d.source==="flash"?"flash, record "+d.seq:"build defaults");
   if(d.reboot_pending.length)src+=" · reboot pending: "+d.reboot_pending.join(", ");

@@ -5,6 +5,7 @@
 #include <stdexcept>
 
 #include <fcntl.h>
+#include <poll.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -57,6 +58,18 @@ bool SerialPort::write_all(const uint8_t* p, size_t n)
         n -= static_cast<size_t>(k);
     }
     return true;
+}
+
+long SerialPort::read_some(uint8_t* p, size_t cap, int timeout_ms)
+{
+    pollfd pf{fd_, POLLIN, 0};
+    const int r = ::poll(&pf, 1, timeout_ms);
+    if (r < 0) return errno == EINTR ? 0 : -1;
+    if (r == 0) return 0;
+    if (pf.revents & (POLLERR | POLLHUP | POLLNVAL)) return -1;
+    const ssize_t k = ::read(fd_, p, cap);
+    if (k < 0) return (errno == EINTR || errno == EAGAIN) ? 0 : -1;
+    return k == 0 ? -1 : static_cast<long>(k);
 }
 
 }  // namespace flow

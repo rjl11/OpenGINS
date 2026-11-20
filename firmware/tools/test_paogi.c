@@ -48,9 +48,9 @@ static paogi_in_t base_in(void)
     memset(&in, 0, sizeof in);
     in.have_pos = true;
     in.pos_from_ins = true;
-    in.ant_lat_deg = 59.5;
-    in.ant_lon_deg = 17.25;
-    in.ant_h_ell_m = 60.0;
+    in.lat_deg = 59.5;
+    in.lon_deg = 17.25;
+    in.h_ell_m = 60.0;
     in.have_undulation = true;
     in.undulation_m = 30.0f;
     in.have_nav = true;

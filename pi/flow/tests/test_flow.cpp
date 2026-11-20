@@ -114,6 +114,32 @@ static void test_link_example()
         hex += h;
     }
     CHECK(hex == FLOW_LINK_EXAMPLE_HEX);
+
+    // Clock sync: the unit's side decodes the request and builds the reply.
+    auto to_hex = [](const uint8_t* p, size_t n) {
+        std::string s;
+        char        t[3];
+        for (size_t i = 0; i < n; i++) {
+            std::snprintf(t, sizeof t, "%02x", p[i]);
+            s += t;
+        }
+        return s;
+    };
+    uint8_t q[FLOW_LINK_TIME_REQ_FRAME_LEN];
+    CHECK(flow_link_encode_time_req(7, q, sizeof q) == sizeof q);
+    CHECK(to_hex(q, sizeof q) == FLOW_LINK_EXAMPLE_TIME_REQ_HEX);
+    uint8_t  type = 0;
+    uint32_t seq = 0;
+    CHECK(flow_link_check(q, sizeof q, &type) == static_cast<int>(FLOW_MSG_TIME_REQ_LEN));
+    CHECK(type == FLOW_MSG_TIME_REQ);
+    CHECK(flow_link_decode_time_req(&q[FLOW_LINK_HEADER_LEN], FLOW_MSG_TIME_REQ_LEN, &seq) == 0 && seq == 7);
+    flow_msg_time_resp_t tr{};
+    tr.seq = seq;
+    tr.turnaround_us = 42;
+    tr.unit_rx_us = 0x1234567890ull;
+    uint8_t r[FLOW_LINK_TIME_RESP_FRAME_LEN];
+    CHECK(flow_link_encode_time_resp(&tr, r, sizeof r) == sizeof r);
+    CHECK(to_hex(r, sizeof r) == FLOW_LINK_EXAMPLE_TIME_RESP_HEX);
 }
 
 static void test_interval_watch()

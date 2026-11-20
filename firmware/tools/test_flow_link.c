@@ -7,6 +7,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "flow_link.h"
 
@@ -67,6 +68,29 @@ int main(void)
 
     f[10] ^= 1; /* one bit flipped in the payload */
     CHECK(flow_link_crc16(&f[2], 3 + len) != crc);
+    uint8_t type = 0;
+    CHECK(flow_link_check(f, n, &type) == -1);
+    f[10] ^= 1;
+    CHECK(flow_link_check(f, n, &type) == (int)FLOW_MSG_FLOW_LEN && type == FLOW_MSG_FLOW);
+
+    /* Clock sync: both examples decode and are rebuilt byte for byte. */
+    uint8_t q[32], r[32];
+    size_t  qn = from_hex(FLOW_LINK_EXAMPLE_TIME_REQ_HEX, q, sizeof q);
+    CHECK(qn == FLOW_LINK_TIME_REQ_FRAME_LEN);
+    CHECK(flow_link_check(q, qn, &type) == (int)FLOW_MSG_TIME_REQ_LEN && type == FLOW_MSG_TIME_REQ);
+    uint32_t seq = 0;
+    CHECK(flow_link_decode_time_req(&q[5], FLOW_MSG_TIME_REQ_LEN, &seq) == 0 && seq == 7u);
+    CHECK(flow_link_encode_time_req(7u, e, sizeof e) == qn && memcmp(e, q, qn) == 0);
+
+    size_t rn = from_hex(FLOW_LINK_EXAMPLE_TIME_RESP_HEX, r, sizeof r);
+    CHECK(rn == FLOW_LINK_TIME_RESP_FRAME_LEN);
+    CHECK(flow_link_check(r, rn, &type) == (int)FLOW_MSG_TIME_RESP_LEN && type == FLOW_MSG_TIME_RESP);
+    flow_msg_time_resp_t tr = {0};
+    CHECK(flow_link_decode_time_resp(&r[5], FLOW_MSG_TIME_RESP_LEN, &tr) == 0);
+    CHECK(tr.seq == 7u && tr.turnaround_us == 42u && tr.unit_rx_us == 0x1234567890ull);
+    uint8_t e2[32];
+    CHECK(flow_link_encode_time_resp(&tr, e2, sizeof e2) == rn && memcmp(e2, r, rn) == 0);
+    CHECK(flow_link_decode_time_resp(&r[5], FLOW_MSG_TIME_RESP_LEN - 1, &tr) == -1);
 
     printf(fails ? "test_flow_link: %d FAILED\n" : "test_flow_link: OK\n", fails);
     return fails ? EXIT_FAILURE : EXIT_SUCCESS;

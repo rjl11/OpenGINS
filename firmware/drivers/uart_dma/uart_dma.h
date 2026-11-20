@@ -23,7 +23,9 @@
 extern "C" {
 #endif
 
-#define UART_DMA_TX_SIZE 512u /* power of two */
+/* Power of two. 2048: whole RTCM frames (up to 1029 bytes) for the GNSS
+ * receiver, with room for the next one. */
+#define UART_DMA_TX_SIZE 2048u
 
 typedef struct {
     uart_inst_t *uart;

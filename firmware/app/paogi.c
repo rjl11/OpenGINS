@@ -34,13 +34,13 @@ void paogi_fill(const paogi_in_t *in, paogi_fix_t *f)
     if (in->hdop_valid) f->hdop = in->hdop;
     if (in->gnss_fresh && in->diff_age_s > 0.0f) f->age_s = in->diff_age_s;
 
-    /* The antenna, not the ground point: AgOpenGPS corrects for the
-     * antenna height itself. */
+    /* The ground point (or the antenna without an antenna height): we
+     * correct for the antenna height, AgOpenGPS is set to 0. */
     if (in->have_pos) {
         f->pos_valid = true;
-        f->lat_deg = in->ant_lat_deg;
-        f->lon_deg = in->ant_lon_deg;
-        f->alt_msl_m = in->ant_h_ell_m - (in->have_undulation ? (double)in->undulation_m : 0.0);
+        f->lat_deg = in->lat_deg;
+        f->lon_deg = in->lon_deg;
+        f->alt_msl_m = in->h_ell_m - (in->have_undulation ? (double)in->undulation_m : 0.0);
         f->quality = (!in->pos_from_ins || in->gnss_fresh) ? in->rx_quality : 6;
     }
 

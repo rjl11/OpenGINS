@@ -249,8 +249,9 @@ text(sx + 26, y29 + 31, "Development builds (WEB_MODE=always) ignore it.", 10.5,
 yt, yb = ry(27) - 10, ry(21) + 10
 bx = BX1 + 40
 a(f'<path d="M{bx},{yt} h10 V{yb} h-10" fill="none" stroke="{C["res"]}" stroke-width="2.5"/>')
-text(bx + 22, (yt + yb) / 2 - 6, "Reserved: GP16–GP21 (SPI0)", 11.5, fill="#b45309", weight="bold")
-text(bx + 22, (yt + yb) / 2 + 10, "W5500 Ethernet, on hold. Leave unconnected.", 10.5, fill=C["mute"])
+text(bx + 22, (yt + yb) / 2 - 14, "W5500 Ethernet (optional): GP16–GP21", 11.5, fill="#b45309", weight="bold")
+text(bx + 22, (yt + yb) / 2 + 2, "16 MISO · 17 CS · 18 SCK · 19 MOSI · 20 RST · 21 INT", 10.5, fill=C["mute"])
+text(bx + 22, (yt + yb) / 2 + 16, "Used only with \"Ethernet fitted\" on in the web config.", 10.5, fill=C["mute"])
 
 # ---------------- Debug Probe (optional) ----------------
 PX0, PX1 = (BX0 + BX1) / 2 - 120, (BX0 + BX1) / 2 + 120

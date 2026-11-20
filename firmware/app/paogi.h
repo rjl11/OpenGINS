@@ -46,10 +46,12 @@ typedef struct {
  * paogi_fill() (the field rules of plans/ethernet-w5500-agopenweb.md, kept
  * here so the host test covers them). */
 typedef struct {
-    /* Position: the antenna, from the filter or the receiver. */
+    /* Position: the ground point below the antenna when the antenna height
+     * is set (ground_point.h), else the antenna; from the filter or the
+     * receiver. AgOpenGPS / AgOpenWeb then run with an antenna height of 0. */
     bool     have_pos;       /* false: no position at all, quality 0         */
     bool     pos_from_ins;   /* the filter is navigating                     */
-    double   ant_lat_deg, ant_lon_deg, ant_h_ell_m;
+    double   lat_deg, lon_deg, h_ell_m;
     bool     have_undulation;
     float    undulation_m;   /* the receiver's, for the height above MSL     */
 

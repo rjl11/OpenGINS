@@ -1,8 +1,8 @@
 # Ethernet output with a W5500, compatible with AgOpenWeb
 
-> **Status: on hold** (2026-11-06). This is not part of the current build. The plan is kept for when wired Ethernet / AgOpenWeb output is added, and SPI0 (GP16–21) stays reserved for it.
+> **Status: code written, not yet tested with a W5500** (2026-11-20; on hold from 2026-11-06 until then). The driver is `firmware/drivers/w5500` (register level, UDP only, in place of ioLibrary), the app module `firmware/app/eth.c`. The web config page has an "Ethernet fitted" switch (off by default, `APP_ETH_FITTED`) and the static IP address, mask and gateway, all applied live (settings version 10). While it is off the pins are left alone. Fitted: `$PAOGI` goes to the subnet broadcast on UDP 9999 on any platform while the link is up (USB stays tractor-only, and `paogi off` / `log on` hold only USB); RTCM on UDP 2233 is put back into frames (`firmware/app/rtcm_frame.c`, host test `firmware/tools/test_rtcm_frame.c`) and queued whole for COM1 through `um980_send_rtcm()`, only while the receiver is in RUN. The UART TX ring went from 512 to 2048 bytes for whole frames. Status: the `ETH` and `RTCM` lines on USB, `eth` and `corrections` in `/status.json`. Also done: one correction source at a time (`firmware/app/rtcm_src.c`, web setting `rtcm_src`: auto / ethernet / bluetooth; Bluetooth has no RTCM path yet), socket 2 for the front camera unit (flow frames on UDP 5800 and the clock sync with it, [front-camera-unit.md](front-camera-unit.md)), socket 3 answering AgIO's scan and hello on UDP 8888 (`firmware/app/aog_pgn.c`; host test `firmware/tools/test_aog_pgn.c` covers both). Verification below is still to do.
 >
-> **The sentence is already sent on USB** (2026-11-16): on the tractor platform, `firmware/app/paogi.c` formats `$PAOGI` as described below and `main.c` sends it on the USB serial port at 10 Hz, between the status report's text lines (readers skip lines that don't start with `$`). The USB command `paogi off` stops it, `paogi on` starts it again, and the USB log mode (`log on`) holds it. The Ethernet channel will reuse the same formatter. Choices made there: PPP counts as quality 1; roll and pitch are sent whenever the filter has an attitude on a live IMU (also from the AHRS while the INS is not navigating), the heading only from the INS in FULL or COASTING and only while its yaw 1-sigma is at most `APP_PAOGI_HEADING_MAX_SD_DEG` (1°, an estimate; with a single antenna the yaw drifted 4° in a minute standing still in FULL, bench 2026-11-16); the yaw rate is the mean bias-corrected gyro over the 100 ms, turned into the NED yaw rate. Host test: `firmware/tools/test_paogi.c`.
+> **The sentence is already sent on USB** (2026-11-16): on the tractor platform, `firmware/app/paogi.c` formats `$PAOGI` as described below and `main.c` sends it on the USB serial port at 10 Hz, between the status report's text lines (readers skip lines that don't start with `$`). The USB command `paogi off` stops it, `paogi on` starts it again, and the USB log mode (`log on`) holds it. The Ethernet channel will reuse the same formatter. Since 2026-11-20 the position is the true ground point when the antenna height is set ("Position point" below). Choices made there: PPP counts as quality 1; roll and pitch are sent whenever the filter has an attitude on a live IMU (also from the AHRS while the INS is not navigating), the heading only from the INS in FULL or COASTING and only while its yaw 1-sigma is at most `APP_PAOGI_HEADING_MAX_SD_DEG` (1°, an estimate; with a single antenna the yaw drifted 4° in a minute standing still in FULL, bench 2026-11-16); the yaw rate is the mean bias-corrected gyro over the 100 ms, turned into the NED yaw rate. Host test: `firmware/tools/test_paogi.c`.
 
 ## Context
 Add a WIZnet W5500 Ethernet module on SPI so the device sends its position over wired UDP to [AgOpenWeb](https://github.com/AgOpenGPS-Official/AgOpenWeb) (and AgOpenGPS/AgIO) on the tractor network. BLE output stays as it is. Ethernet is an extra channel, not a replacement.
@@ -62,7 +62,12 @@ Pitfalls:
 - All 15 fields must be present, so keep the commas of empty fields and send yaw rate even when it's 0.
 - **AgOpenWeb settings to check on the bench:** `$PAOGI` counts as a dual-antenna source, so its heading source must be set to dual, and its "Dual Heading Offset" stays 0 because the INS yaw is already the vehicle heading. The AiO v4.5 firmware at https://github.com/renatorgr/Boards (README, "Output to the program", read 2026-11-10) sends `$PAOGI` with AgOpenGPS's heading source set to "Dual", which supports this; AgOpenWeb's own setting is still to be checked.
 
-**Position point:** send the INS position at the **GNSS antenna** (the solution propagated through the IMU → antenna lever arm), not at the IMU. AgOpenWeb applies its own antenna-height roll compensation and pivot offsets, so sending a point that's already been moved would correct it twice.
+**Position point (changed 2026-11-20):** send the **true ground point** below the GNSS antenna whenever the antenna height (`ant_height_m`) is set. It is the INS position moved to the antenna by the IMU → antenna lever arm, then down by the antenna height along the body down axis (`firmware/app/ground_point.c`, `best_position()` in `main.c`). With no antenna height it is the antenna itself.
+- **AgOpenWeb / AgOpenGPS:** run with an antenna height of 0, so their own roll compensation adds nothing. Their pivot offsets (forward and sideways from the pivot) stay as they are, since the point is still below the antenna.
+- **Why:** this device has the attitude, and later the split between cab and chassis roll from a second IMU on the chassis ([front-camera-unit.md](front-camera-unit.md)). One roll times the antenna height on the host can't do that.
+- **Bench check:** with the antenna height 0 in AgOpenWeb, the position shown must not move when the unit is rolled.
+
+The earlier rule sent the antenna and left the roll compensation to AgOpenWeb.
 
 **Fix quality:**
 - Pass the UM980 quality through (4 = RTK fixed, 5 = float, 2 = DGPS, 1 = single) while GNSS updates are fresh.
@@ -97,13 +102,15 @@ Pitfalls:
 - Use a module with an integrated RJ45 and magnetics. For a tractor, use a sealed connector (e.g. M12 D-coded) on the enclosure.
 
 ## Software stack
-- WIZnet `ioLibrary_Driver`, which uses the W5500's hardware TCP/IP stack and 8 sockets. No lwIP is needed for Ethernet.
+- The W5500's hardware TCP/IP stack and its 8 sockets, driven by our own register-level driver (`firmware/drivers/w5500`, from the W5500 datasheet v1.1) instead of WIZnet's `ioLibrary_Driver`: only static IPv4, UDP sockets and the PHY link bit are needed, which is about 300 lines. No lwIP is needed for Ethernet.
+- Sending does not wait: SEND is issued and the next send on the socket checks that it ended. The ARP retry is set to 100 ms × 3 instead of 200 ms × 8, for a unicast destination later.
 - Everything runs on core 0, as in [rtos-decision.md](rtos-decision.md). The filter stays alone on core 1.
 - The Wi-Fi web server ([web-config-server.md](web-config-server.md)) keeps using lwIP on the CYW43439. The two stacks are independent.
 - **Network settings:**
-  - Static IP 192.168.5.124 (the AOG GPS-module address), mask /24, configurable from the web config page.
+  - Static IP 192.168.5.124 (the AOG GPS-module address), mask /24, gateway 192.168.5.1, configurable from the web config page (`eth_ip`, `eth_mask`, `eth_gw`; the gateway may be 0.0.0.0).
   - Socket 0: UDP, sends `$PAOGI` to 192.168.5.255:9999.
-  - Socket 1: UDP, listens on 2233 for RTCM, unicast and broadcast. Datagrams are up to 512 bytes, so give the socket at least a 2 KB RX buffer.
+  - Socket 1: UDP, listens on 2233 for RTCM, unicast and broadcast. Datagrams are up to 512 bytes, so give the socket at least a 2 KB RX buffer (it has 8 KB, polled every 1 ms, up to 8 datagrams a poll).
+  - Socket 2 (done 2026-11-20 for flow and the clock sync): UDP to and from the front camera unit ([front-camera-unit.md](front-camera-unit.md)): flow frames, TM171 sample batches, and the clock sync that replaces the camera's trigger and strobe wires. The unit is powered over PoE, and a small switch in the cab joins it, the Pico and the tablet.
   - Link up/down is read from the W5500 PHY status register and shown on the diagnostics page.
   - The MAC address is derived from the RP2350 unique ID, with the locally administered bit set.
 
@@ -111,12 +118,14 @@ Pitfalls:
 - AgOpenWeb's datagrams are chunks of the RTCM stream, not whole messages, so frames are reassembled across datagrams, as on the Bluetooth path.
 - Path: UDP 2233 → ring buffer → RTCM3 frame check → the `um980_tx` arbiter → UART1 TX → UM980 **COM1**. This is the same path that Bluetooth RTCM uses, and no port is locked ([gnss-um98x-config.md](gnss-um98x-config.md)).
 - Bluetooth RTCM from the phone (SW Maps, [rtcm-over-bluetooth.md](rtcm-over-bluetooth.md)) goes into the same queue. Only one correction source may be active at a time; the arbiter takes frames from the selected source and drops the other's. The diagnostics page shows which source has delivered frames recently.
+  - Done 2026-11-20 (`firmware/app/rtcm_src.c`, `rtcm_offer()` in `main.c`): web setting `rtcm_src`. `auto` takes the first source to deliver a frame and keeps it until it has sent nothing for `APP_RTCM_SRC_HOLD_S` (5 s, an estimate), then the next one to deliver wins; `ethernet` or `bluetooth` takes only that one. Whole frames only, so a switch never splits a frame. Counted per source (frames, dropped, age) under `corrections` in `/status.json` and on the `RTCM` status line.
 - With this in place, AgOpenWeb's NTRIP client can replace the phone as the correction source.
 - **Hold several datagrams between polls.** The AiO v26 Teensy firmware lost corrections in the field because its receive queue held a single datagram; it now queues 8 (its issue #32; details in [rtcm-over-bluetooth.md](rtcm-over-bluetooth.md), "Path into the UM980"). AgOpenWeb's datagrams come 10–25 ms apart, so the W5500 socket's 2 KB RX buffer must be drained at least that often, or made larger.
 
 ## Discovery
 - Nothing is needed for v1, because AgOpenWeb learns the GPS source from the first `$` datagram.
-- Optional later: answer the AOG scan request on port 8888 (layouts from `Docs/PGN.md`; every PGN starts `80 81`):
+- **Done 2026-11-20** (socket 3, `firmware/app/aog_pgn.c`): the scan request is answered to 255.255.255.255:9999, so AgIO's scan also finds the unit when it sits on another subnet; the hello to the subnet broadcast on 9999. The CRC byte of the two requests is not checked, only their fixed bytes: AgIO is remembered to send them with a constant 0x47 in place of the sum, which is not verified here. Not tried against AgIO or AgOpenWeb yet. PGN 201 (AgIO setting the module's subnet) is not handled; the address is set on the web page.
+- The layouts (from `Docs/PGN.md`; every PGN starts `80 81`):
   - Scan request, PGN 202 (0xCA): source 0x7F, length 3, data `202, 202, 5`, CRC.
   - Reply, PGN 203 (0xCB): source 0x78 (120, the GPS module), length 7, data = the four IP bytes and the first three subnet bytes, CRC.
   - Not yet tried against AgOpenWeb.

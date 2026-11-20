@@ -26,7 +26,9 @@ add_library(flow_core STATIC src/flow_lk.cpp)
 target_include_directories(flow_core PUBLIC src ${COMMON_DIR})
 target_link_libraries(flow_core PUBLIC ${OpenCV_LIBS})
 
-add_executable(flow src/main.cpp src/serial.cpp)
+# V4L2 capture is always built: for boards where libcamera can't drive the
+# sensor, such as the ROCK 4SE (README, "Setup on a Radxa ROCK 4SE").
+add_executable(flow src/main.cpp src/serial.cpp src/udp.cpp src/v4l2_camera.cpp)
 target_link_libraries(flow PRIVATE flow_core)
 if(LIBCAMERA_FOUND)
   target_sources(flow PRIVATE src/camera.cpp)
@@ -34,7 +36,7 @@ if(LIBCAMERA_FOUND)
   target_link_libraries(flow PRIVATE PkgConfig::LIBCAMERA)
   message(STATUS "flow: libcamera ${LIBCAMERA_VERSION}, camera capture built")
 else()
-  message(WARNING "flow: libcamera not found, only --frames DIR will work")
+  message(WARNING "flow: libcamera not found, camera capture through V4L2 only")
 endif()
 
 add_executable(test_flow tests/test_flow.cpp)

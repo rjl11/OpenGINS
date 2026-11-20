@@ -28,10 +28,11 @@
  * sensors fitted), version 4 (168 bytes, up to the dead-reckoning
  * window), version 5 (172 bytes, up to the antenna height), version 6
  * (176 bytes, up to the height source), version 7 (188 bytes, up to the
- * offset filter) and version 8 (192 bytes, up to the GNSS position
- * decimation) are read with the newer fields at their defaults.
+ * offset filter), version 8 (192 bytes, up to the GNSS position
+ * decimation) and version 9 (196 bytes, up to the offset barometer sigma)
+ * are read with the newer fields at their defaults.
  * (platform_p1 was added without a bump: see there.) */
-#define SETTINGS_VERSION    9
+#define SETTINGS_VERSION    10
 #define SETTINGS_V1_SIZE    140u
 #define SETTINGS_V2_SIZE    160u
 #define SETTINGS_V3_SIZE    164u
@@ -40,6 +41,7 @@
 #define SETTINGS_V6_SIZE    176u
 #define SETTINGS_V7_SIZE    188u
 #define SETTINGS_V8_SIZE    192u
+#define SETTINGS_V9_SIZE    196u
 
 /* settings_t.height_src: where the INS takes its height from. */
 #define SETTINGS_HEIGHT_AUTO 0 /* by platform: GNSS on a survey pole, else the barometer */
@@ -120,6 +122,19 @@ typedef struct {
      * (INS_DEFAULT_BARO_STDDEV_M, 2 m). Default APP_HEIGHT_OFFSET_BARO_SD_M.
      * A change restarts the filter. */
     float offset_baro_sd_m;
+
+    /* Version 10. W5500 Ethernet (app/eth.h, plans/ethernet-w5500-agopenweb.md):
+     * fitted or not (1 = on; off leaves its pins alone), and the static IPv4
+     * address, subnet mask and gateway. Applied live: the chip is started,
+     * held in reset or given the new addresses. Defaults APP_ETH_*. */
+    uint8_t eth_fitted;
+    uint8_t eth_ip[4];
+    uint8_t eth_mask[4];
+    uint8_t eth_gw[4];
+    /* Which RTCM source feeds the receiver (app/rtcm_src.h,
+     * RTCM_SRC_MODE_*): 0 auto (the first to deliver, until it goes
+     * silent), 1 Ethernet only, 2 Bluetooth only. Applied live. */
+    uint8_t rtcm_src;
 } settings_t;
 
 /* The platform (APP_PLATFORM_*) the settings ask for. */

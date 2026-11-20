@@ -30,7 +30,7 @@ td:last-child{font-variant-numeric:tabular-nums;word-break:break-word}
 <main id="main"></main>
 <script>
 "use strict";
-const TITLES={wifi:"Wi-Fi",imu:"IMU (TM210)",gnss:"GNSS",heading:"GNSS heading",baro:"Barometer (BMP581)",cpu:"CPU load",nav:"Filter (INSLIB)",mag:"Magnetometer (AHRS)",calib:"IMU calibration",rx_overflows:"UART ring overflows"};
+const TITLES={wifi:"Wi-Fi",eth:"Ethernet (W5500)",corrections:"Corrections (RTCM)",imu:"IMU (TM210)",gnss:"GNSS",heading:"GNSS heading",baro:"Barometer (BMP581)",cpu:"CPU load",nav:"Filter (INSLIB)",mag:"Magnetometer (AHRS)",calib:"IMU calibration",rx_overflows:"UART ring overflows"};
 let last=0;
 function fmt(v){
   if(v===null||v===undefined)return"—";

@@ -46,6 +46,7 @@ add_subdirectory(drivers/um980)
 add_subdirectory(drivers/inslib)
 add_subdirectory(drivers/pulse_in)
 add_subdirectory(drivers/flow_io)
+add_subdirectory(drivers/w5500)
 
 add_executable(app
     app/main.c
@@ -70,6 +71,11 @@ add_executable(app
     app/pole_mount_fit.c
     app/usb_log.c
     app/paogi.c
+    app/eth.c
+    app/rtcm_frame.c
+    app/rtcm_src.c
+    app/aog_pgn.c
+    app/clock_sync.c
 )
 
 target_include_directories(app PRIVATE app)
@@ -176,6 +182,8 @@ target_link_libraries(app PRIVATE
     inslib
     pulse_in
     flow_io
+    w5500
+    pico_unique_id
 )
 
 # Default flash (XIP) binary. A whole-image copy_to_ram build won't fit once

@@ -151,7 +151,7 @@ python firmware/tools/inslib_replay_plot.py temp/replay.png temp/replay/log_gnss
 
 ## Host tests
 
-The calibration, pole, speed, ground-point, `$PAOGI`, geoid and flow-link code is plain C that also builds on a PC. Each test exits with 0 when all checks pass. From the repo root (`temp/` is git-ignored):
+The calibration, pole, speed, ground-point, `$PAOGI`, RTCM framing and source choice, AgOpenGPS PGN, clock sync, geoid and flow-link code is plain C that also builds on a PC. Each test exits with 0 when all checks pass. From the repo root (`temp/` is git-ignored):
 
 ```bash
 mkdir -p temp
@@ -163,6 +163,9 @@ gcc -O2 -Wall -Wextra -I firmware/app firmware/tools/test_pole_aid.c firmware/ap
 gcc -O2 -Wall -Wextra -I firmware/app firmware/tools/test_pole_mount.c firmware/app/pole_aid.c firmware/app/pole_mount_fit.c firmware/app/imu_calib_lsq.c -lm -o temp/test_pole_mount && temp/test_pole_mount
 gcc -O2 -Wall -Wextra -I firmware/app firmware/tools/test_ground_point.c firmware/app/ground_point.c -lm -o temp/test_ground_point && temp/test_ground_point
 gcc -O2 -Wall -Wextra -I firmware/app firmware/tools/test_paogi.c firmware/app/paogi.c -lm -o temp/test_paogi && temp/test_paogi
+gcc -O2 -Wall -Wextra -I firmware/app firmware/tools/test_rtcm_frame.c firmware/app/rtcm_frame.c -o temp/test_rtcm_frame && temp/test_rtcm_frame
+gcc -O2 -Wall -Wextra -I firmware/app firmware/tools/test_aog_pgn.c firmware/app/aog_pgn.c firmware/app/rtcm_src.c -o temp/test_aog_pgn && temp/test_aog_pgn
+gcc -O2 -Wall -Wextra -I firmware/app firmware/tools/test_clock_sync.c firmware/app/clock_sync.c -lm -o temp/test_clock_sync && temp/test_clock_sync
 gcc -O2 -Wall -Wextra -I firmware/app -I firmware/drivers/flow_io -I common firmware/app/flow_nav.c firmware/tools/test_flow_nav.c -lm -o temp/test_flow_nav && temp/test_flow_nav
 gcc -O2 -Wall -Wextra -I common firmware/tools/test_flow_link.c -o temp/test_flow_link && temp/test_flow_link
 gcc -O2 -Wall -Wextra -I firmware/app firmware/tools/test_speed_ppm.c firmware/app/speed_ppm.c -lm -o temp/test_speed_ppm && temp/test_speed_ppm
@@ -200,6 +203,6 @@ Then rebuild, and run `test_geoid` above to check the cut against the source gri
 - **Timestamps are taken where the data arrives** (`time_us_64()` in the ISR or DMA-complete handler), not where it is processed.
 - **The filter's hot path and the timestamping ISRs live in SRAM** (`__not_in_flash_func` or the linker override); check with `check_ram_path.py` after each build.
 - **Every pin, bus instance and baud rate is in `firmware/app/board_pins.h`.** No other file names a GPIO number; drivers get their pins through their config structs.
-- **GP16–21 (SPI0) stay reserved** for a W5500 Ethernet option. **ADC input 3 / GP29 must never be read**: the CYW43439 shares it.
+- **GP16–21 (SPI0) are the W5500 Ethernet option**, driven only while "Ethernet fitted" is on in the web config. **ADC input 3 / GP29 must never be read**: the CYW43439 shares it.
 - **Drivers** are Pico SDK static libraries in `firmware/drivers/<name>/`, each with its own `CMakeLists.txt`; `firmware/drivers/bmp581` is the pattern. Vendor code is a git submodule in `external/`.
 - **The UM980 / UM982 is configured by the firmware at boot.** Never lock one of its ports (`CONFIG RXTYPE` can brick the receiver). Its own firmware is updated with Unicore's UPrecise over the module's USB-C, never from the Pico.

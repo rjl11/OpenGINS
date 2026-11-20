@@ -12,9 +12,11 @@
 #define FIELD_IO_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "app_config.h"
+#include "flow_nav.h"
 #include "nav_core1.h"
 #include "settings.h"
 #include "um980.h"
@@ -36,6 +38,18 @@ void field_io_imu(const nav_imu_t *n);
 /* Takes every new edge, event and flow frame (to the log and the
  * counters). Returns true if it did work. */
 bool field_io_poll(uint64_t now);
+
+/* A whole flow-link frame (common/flow_link.h: sync to CRC) that came on the
+ * USB port (usb_log.h, command "flow <hex>") or as a UDP datagram from the
+ * front camera unit (eth.h, socket 2) instead of the PIO UART. Checked like
+ * a link frame, then handled the same way; the camera is free-running on
+ * both, so it is timed by its arrival (or by the clock sync, below). False
+ * if it is malformed or its CRC is wrong. */
+bool field_io_usb_flow(const uint8_t *frame, size_t n, uint64_t t_arrival_us);
+
+/* The clock sync with the front camera unit (eth.h): while it is valid,
+ * free-running frames are timed by the unit's own timestamp (flow_nav.h). */
+void field_io_set_clock(flow_nav_clock_fn fn, void *ctx);
 
 /* Each BESTNAV epoch: the GNSS speed for the raw pulses-per-metre figure. */
 void field_io_gnss(const um980_nav_t *g);

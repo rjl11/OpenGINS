@@ -136,6 +136,8 @@ The firmware defaults (`APP_*_PSD`, `APP_*_BIAS_RW` in `firmware/app/app_config.
 
 So the x and y gyro noise may be about 2× the datasheet-derived figure, and the accelerometer a little quieter. Their note says the TM171 outputs bias-corrected, filtered data, and they logged it at 20 ms spacing, so the figures are not directly those of a TM210 raw object at 800 Hz. They are a reason to run our own Allan test before trusting the start values, not replacements for them.
 
+**The TM171 as a second IMU (planned 2026-11-20).** A TM171 (`docs/datasheets/TransducerM_TM151_TM171_Datasheet_EN_V116-R.pdf`: up to 800 Hz, calibrated raw data output, UART and USB-C, same EasyProfile protocol) goes in the front camera unit on the tractor's chassis, read by the unit's SBC. It de-rotates the flow, serves as a degraded backup for this TM210 on the cab roof, and gives the chassis roll that separates the cab's suspension roll for the ground point. See [front-camera-unit.md](front-camera-unit.md).
+
 ## Calibration steps
 1. **Allan variance**: static log at 800 Hz, constant temperature, after a 30 min warm-up → `external/INSLIB/tools/allan_variance.py` → final PSDs and bias random walks.
    - **Length: 8–12 h.** The relative error of the Allan deviation at averaging time τ is about 1/√(2(N−1)), with N = T/τ windows. The random walk terms (τ = 1–10 s) are fine after minutes. At the bias-instability minimum (about 650 s on the TM171, above) 2 h gives N ≈ 11, about ±22 %. The bias random walk sits on the rising slope beyond it (τ ≈ 1000–3000 s), which needs 8–12 h for about ±10–15 %.

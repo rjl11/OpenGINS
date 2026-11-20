@@ -63,8 +63,8 @@ A cmake option `WEB_MODE` selects it, passed to the code as `APP_WEB_MODE` in `a
 - Client test from dietpi (a Pi on Ethernet, 192.0.2.51, using its spare `wlan0`): `iw connect OpenGINS` associated at −45 dBm. dhclient got 192.168.4.16 with router and DNS 192.168.4.1 and a 24 h lease, and the Pico logged `DHCPS: client connected ... host="DietPi"` and `clients 1`. Over the AP: `/` 3457 B in 20 ms, `/status.json` in 7 ms, 30 of 30 requests OK. DNS at 192.168.4.1 answers `example.com` and `connectivitycheck.gstatic.com` with 192.168.4.1, and an mDNS query for `opengins.local` is answered with 192.168.4.1. dietpi's `wlan0` was put back down afterwards.
 - **Not tested yet:** an Android phone (captive-portal popup, whether it keeps the connection without internet, `.local` in the browser).
 
-### Over Ethernet (on hold with the W5500)
-The same pages could also be served over the W5500 (ioLibrary has a small HTTP server), so the device can be configured from the tractor network without Wi-Fi. See [ethernet-w5500-agopenweb.md](ethernet-w5500-agopenweb.md).
+### Over Ethernet (not planned yet)
+The same pages could also be served over the W5500 (a small HTTP server on one of its TCP sockets), so the device can be configured from the tractor network without Wi-Fi. See [ethernet-w5500-agopenweb.md](ethernet-w5500-agopenweb.md).
 
 ## Software stack (stays bare metal)
 - lwIP in `NO_SYS=1` mode via `pico_cyw43_arch_lwip_threadsafe_background`. BTstack later uses the same `cyw43_arch` (CLAUDE.md). This fits the bare-metal layout in [rtos-decision.md](rtos-decision.md): everything network-related runs on core 0, the filter stays alone on core 1.
@@ -99,7 +99,7 @@ BLE and Wi-Fi can run together on the CYW43439, but they share airtime and RAM. 
 - GNSS heading (dual-antenna mode only): heading solution status and position type, baseline length and its median, heading σ, gated epochs ([gnss-um98x-config.md](gnss-um98x-config.md)).
 - Filter: `nav_suite` mode (NONE / ATTITUDE_ONLY / COASTING / FULL, [inslib-nav-suite.md](inslib-nav-suite.md)), position/velocity/attitude, key covariance terms, innovation stats, number of rejected updates.
 - Corrections: Bluetooth connected (BLE or SPP), RTCM bytes and frames received from SW Maps, CRC errors, time since the last frame, message types seen ([rtcm-over-bluetooth.md](rtcm-over-bluetooth.md)).
-- Ethernet (on hold): link up/down, `$PAOGI` datagrams sent, RTCM bytes received on UDP 2233.
+- Ethernet (done 2026-11-20, `eth` in `/status.json`): state (off / not_found / no_link / up), IP, MAC, link speed, `$PAOGI` datagrams sent and refused, RTCM datagrams, frames, CRC errors, frames forwarded and dropped, age and sender of the last datagram.
 - CPU: core 1 worst-case and mean time per 1.25 ms IMU tick (DWT cycle counter), core 0 load, free stack/heap.
 - Optional: receiver command passthrough (send a command, show the reply) for debugging. It goes through the COM1 TX arbiter between RTCM frames. Block `CONFIG RXTYPE`, so a port can't be locked by mistake.
 
@@ -107,7 +107,8 @@ BLE and Wi-Fi can run together on the CYW43439, but they share airtime and RAM. 
 - Lever arms (IMU → GNSS antenna), IMU mounting rotation, filter tuning presets.
 - GNSS antenna mode: single or dual. The default is the compile-time `APP_GNSS_ANTENNA_MODE`; the saved value overrides it, and "revert to defaults" restores it. It applies after a reboot, not live, and the receiver is re-provisioned on that boot. In dual mode, also the antenna baseline direction `baseline_yaw_b` ([gnss-um98x-config.md](gnss-um98x-config.md), "Antenna mode").
 - Output: rate, Bluetooth device name, BLE (NUS) or Classic SPP, message format.
-- Ethernet (on hold): IP address, mask, destination address and port (default 192.168.5.124 /24 → 192.168.5.255:9999). The output sentence is always `$PAOGI`. See [ethernet-w5500-agopenweb.md](ethernet-w5500-agopenweb.md).
+- Correction source (done 2026-11-20): auto, Ethernet or Bluetooth (`rtcm_src`).
+- Ethernet (done 2026-11-20): fitted on/off, IP address, mask and gateway (default off, 192.168.5.124 /24, gateway 192.168.5.1), applied live. The destination is the subnet broadcast on port 9999, not configurable yet. The output sentence is always `$PAOGI`. See [ethernet-w5500-agopenweb.md](ethernet-w5500-agopenweb.md).
 - Sensor setup: the UART baud rates are fixed (460800 for the UM980/UM982, 921600 for the TM210) and not configurable. The receiver configuration is checked at boot and re-provisioned on a mismatch ([gnss-um98x-config.md](gnss-um98x-config.md)). A "Reconfigure GNSS" button forces a full re-provision (`FRESET` and the whole sequence). In the same way, the TM210 is checked at boot ([imu-tm210-config.md](imu-tm210-config.md)), and a "Reconfigure IMU" button forces its provisioning sequence.
 - Wi-Fi: station SSID and password (default from the build), mode auto / station / AP (default from `WIFI_MODE`).
 - Buttons: save, revert to defaults, reboot.

@@ -24,6 +24,8 @@
 #include "board_pins.h"
 #include "bmp581.h"
 #include "die_temp.h"
+#include "eth.h"
+#include "rtcm_src.h"
 #include "field_io.h"
 #include "geoid.h"
 #include "ground_point.h"
@@ -708,7 +710,7 @@ static void best_position(const nav_output_t *o, uint64_t now, best_pos_t *b)
     double rpy[3] = { o->rpy_rad[0], o->rpy_rad[1], o->rpy_rad[2] };
     double in[3] = { b->lat_deg / DEG, b->lon_deg / DEG, b->h_ell_m };
 
-    /* The antenna ($PAOGI sends it, with or without a ground point): the
+    /* The antenna ($PAOGI sends it when there is no ground point): the
      * filter's IMU point moved by the lever arm, or the receiver's fix. The
      * lever arm is turned with the filter's attitude whenever there is one;
      * the tilt gate below is for the pole's tip, not for the lever arm,
@@ -758,21 +760,36 @@ static void best_position(const nav_output_t *o, uint64_t now, best_pos_t *b)
     b->h_ell_m = gp[2];
 }
 
-/* $PAOGI on the USB port at 10 Hz on the tractor platform (paogi.h,
- * plans/ethernet-w5500-agopenweb.md for the field rules). Sent when core 1
- * publishes, or on its own 100 ms timer while core 1 doesn't, so the
- * receiver-only fallback keeps the rate. */
+/* $PAOGI at 10 Hz (paogi.h, plans/ethernet-w5500-agopenweb.md for the
+ * field rules): on the USB port on the tractor platform, and over Ethernet
+ * (eth.h) on any platform while the W5500 is fitted and its link is up.
+ * Sent when core 1 publishes, or on its own 100 ms timer while core 1
+ * doesn't, so the receiver-only fallback keeps the rate. */
 #define PAOGI_PERIOD_US    100000u
 #define PAOGI_FALLBACK_US  150000u  /* no publish for this long: the timer sends */
 #define PAOGI_DR_AFTER_US  1000000u /* INS with no fresh GNSS epoch: quality 6 */
 
-static bool     s_paogi_on;     /* tractor platform in effect since boot */
+/* RTCM to the receiver's COM1, one source at a time (rtcm_src.h). Bluetooth
+ * will call rtcm_offer() with RTCM_SRC_BT the same way. */
+static rtcm_src_t s_rtcm_src;
+
+static bool rtcm_offer(unsigned src, const uint8_t *frame, size_t len)
+{
+    if (!rtcm_src_accept(&s_rtcm_src, src, time_us_64())) {
+        return false;
+    }
+    return um980_send_rtcm(&s_gnss, frame, len);
+}
+
+static bool rtcm_from_eth(const uint8_t *frame, size_t len) { return rtcm_offer(RTCM_SRC_ETH, frame, len); }
+
+static bool     s_paogi_on;     /* on USB: tractor platform in effect since boot */
 static double   s_paogi_gyr[3]; /* corrected gyro summed since the last sentence */
 static uint32_t s_paogi_gyr_n;
 
 static void paogi_gyro(const float g[3])
 {
-    if (!s_paogi_on) return;
+    if (!s_paogi_on && !s_settings.eth_fitted) return;
     for (int i = 0; i < 3; i++) s_paogi_gyr[i] += g[i];
     s_paogi_gyr_n++;
 }
@@ -795,7 +812,7 @@ static int gga_quality(uint32_t pos_type)
     }
 }
 
-static void paogi_send(const nav_output_t *o, uint64_t now)
+static void paogi_send(const nav_output_t *o, uint64_t now, bool usb, bool eth)
 {
     best_pos_t bp;
     best_position(o, now, &bp);
@@ -806,9 +823,10 @@ static void paogi_send(const nav_output_t *o, uint64_t now)
     memset(&in, 0, sizeof in);
     in.have_pos = bp.source[0] != 'n';
     in.pos_from_ins = ins;
-    in.ant_lat_deg = bp.ant_lat_deg;
-    in.ant_lon_deg = bp.ant_lon_deg;
-    in.ant_h_ell_m = bp.ant_h_ell_m;
+    /* The ground point when there is one, else the antenna (paogi.h). */
+    in.lat_deg = bp.ground ? bp.lat_deg : bp.ant_lat_deg;
+    in.lon_deg = bp.ground ? bp.lon_deg : bp.ant_lon_deg;
+    in.h_ell_m = bp.ground ? bp.h_ell_m : bp.ant_h_ell_m;
     in.have_undulation = s_have_undulation;
     in.undulation_m = s_undulation_m;
 
@@ -855,7 +873,10 @@ static void paogi_send(const nav_output_t *o, uint64_t now)
     paogi_fix_t f;
     paogi_fill(&in, &f);
     char line[PAOGI_MAX];
-    if (paogi_format(&f, line, sizeof line) > 0) printf("%s", line);
+    int n = paogi_format(&f, line, sizeof line);
+    if (n <= 0) return;
+    if (usb) printf("%s", line);
+    if (eth) eth_send_paogi(line, (size_t)n);
 }
 
 /* Called every pass: decides whether a sentence is due. */
@@ -885,7 +906,10 @@ static bool paogi_poll(uint64_t now)
     }
     if (!due) return false;
     s_next_us = now + PAOGI_PERIOD_US;
-    if (usb_log_on() || !paogi_enabled()) {
+    /* USB: held by 'paogi off' and the log mode. Ethernet: neither. */
+    bool usb = s_paogi_on && !usb_log_on() && paogi_enabled();
+    bool eth = eth_up();
+    if (!usb && !eth) {
         /* Held: drop the gyro sums, or the first sentence after the hold
          * would carry the mean yaw rate of the whole hold. */
         s_paogi_gyr[0] = s_paogi_gyr[1] = s_paogi_gyr[2] = 0.0;
@@ -894,7 +918,7 @@ static bool paogi_poll(uint64_t now)
     }
     nav_output_t o;
     nav_get_output(&o);
-    paogi_send(&o, now);
+    paogi_send(&o, now, usb, eth);
     return true;
 }
 
@@ -929,6 +953,53 @@ static void print_pole(const pole_aid_status_t *p)
     printf("\n");
 }
 
+/* The ETH line of the status report: nothing while Ethernet is not fitted. */
+static void print_eth(uint64_t now)
+{
+    eth_status_t e;
+    eth_get_status(&e, now);
+    if (e.state == ETH_OFF) return;
+    printf("ETH   %-15s %u.%u.%u.%u", eth_state_name(e.state), e.ip[0], e.ip[1], e.ip[2], e.ip[3]);
+    if (e.state == ETH_UP) printf("  %s", e.mbps100 ? "100M" : "10M");
+    printf("  paogi %lu (err %lu)  rtcm %lu frames", (unsigned long)e.paogi_sent,
+           (unsigned long)e.paogi_errors, (unsigned long)e.rtcm_frames);
+    if (e.rtcm_frames || e.rtcm_crc_errors) {
+        printf(" (crc %lu, dropped %lu, last %u, %ld ms ago from %u.%u.%u.%u)",
+               (unsigned long)e.rtcm_crc_errors, (unsigned long)e.rtcm_dropped, e.rtcm_last_type,
+               (long)e.rtcm_age_ms, e.rtcm_src_ip[0], e.rtcm_src_ip[1], e.rtcm_src_ip[2], e.rtcm_src_ip[3]);
+    }
+    printf("\n");
+    if (e.front_datagrams) {
+        printf("      front unit %u.%u.%u.%u  %lu datagrams (%lu bad), %ld ms ago\n", e.front_src_ip[0],
+               e.front_src_ip[1], e.front_src_ip[2], e.front_src_ip[3], (unsigned long)e.front_datagrams,
+               (unsigned long)e.front_rejected, (long)e.front_age_ms);
+        printf("      clock sync %s", e.sync_valid ? "valid" : "not valid");
+        if (e.sync_used) {
+            printf("  offset %.0f us  drift %+.1f ppm  rtt min %lu us  rms %.0f us (%lu used)", e.sync_offset_us,
+                   (double)e.sync_drift_ppm, (unsigned long)e.sync_rtt_min_us, (double)e.sync_resid_us,
+                   (unsigned long)e.sync_used);
+        }
+        printf("  req %lu  replies %lu  lost %lu  restarts %lu\n", (unsigned long)e.sync_requests,
+               (unsigned long)e.sync_replies, (unsigned long)e.sync_timeouts, (unsigned long)e.sync_resets);
+    }
+}
+
+/* The RTCM line: which source feeds the receiver. Nothing until a frame came. */
+static void print_rtcm(uint64_t now)
+{
+    const rtcm_src_t *r = &s_rtcm_src;
+    if (r->s[RTCM_SRC_ETH].t_last == 0 && r->s[RTCM_SRC_BT].t_last == 0) return;
+    int a = rtcm_src_active(r, now);
+    const um980_stats_t *gs = um980_stats(&s_gnss);
+    printf("RTCM  %-15s mode %s", a < 0 ? "none" : rtcm_src_name(a), rtcm_src_mode_name(r->mode));
+    for (int k = 0; k < RTCM_SRC_N; k++) {
+        if (r->s[k].t_last == 0) continue;
+        printf("  %s %lu (dropped %lu, %lu ms ago)", rtcm_src_name(k), (unsigned long)r->s[k].frames,
+               (unsigned long)r->s[k].dropped, (unsigned long)((now - r->s[k].t_last) / 1000u));
+    }
+    printf("  to COM1 %lu (refused %lu)\n", (unsigned long)gs->rtcm_frames, (unsigned long)gs->rtcm_dropped);
+}
+
 static void print_status(uint64_t now, uint32_t baro_hz)
 {
     const tm210_stats_t *is = tm210_stats(&s_imu);
@@ -959,6 +1030,8 @@ static void print_status(uint64_t now, uint32_t baro_hz)
     printf("  joins %lu  drops %lu\n", (unsigned long)wi.joins, (unsigned long)wi.drops);
     }
 #endif
+    print_eth(now);
+    print_rtcm(now);
 
     printf("IMU   %-15s %4lu Hz  crc %lu  gaps %lu  ", tm210_state_name(tm210_state(&s_imu)),
            (unsigned long)is->rate_hz, (unsigned long)is->crc_errors, (unsigned long)is->gaps);
@@ -1239,6 +1312,85 @@ static void publish_status_json(uint64_t now, uint32_t baro_hz)
     jw_int(&w, "drops", wi.drops);
     jw_int(&w, "http_busy", wi.http_busy);
     jw_end(&w, '}');
+
+    {
+        eth_status_t e;
+        eth_get_status(&e, now);
+        jw_obj(&w, "eth");
+        jw_str(&w, "state", eth_state_name(e.state));
+        if (e.state != ETH_OFF) {
+            snprintf(ip, sizeof ip, "%u.%u.%u.%u", e.ip[0], e.ip[1], e.ip[2], e.ip[3]);
+            jw_str(&w, "ip", ip);
+            char mac[18];
+            snprintf(mac, sizeof mac, "%02x:%02x:%02x:%02x:%02x:%02x", e.mac[0], e.mac[1], e.mac[2],
+                     e.mac[3], e.mac[4], e.mac[5]);
+            jw_str(&w, "mac", mac);
+            if (e.state == ETH_UP) {
+                jw_int(&w, "mbps", e.mbps100 ? 100 : 10);
+                jw_bool(&w, "full_duplex", e.full_duplex);
+            }
+            jw_int(&w, "link_ups", e.link_ups);
+            jw_int(&w, "paogi_sent", e.paogi_sent);
+            jw_int(&w, "paogi_errors", e.paogi_errors);
+            jw_int(&w, "rtcm_datagrams", e.rtcm_datagrams);
+            jw_int(&w, "rtcm_frames", e.rtcm_frames);
+            jw_int(&w, "rtcm_crc_errors", e.rtcm_crc_errors);
+            jw_int(&w, "rtcm_forwarded", e.rtcm_forwarded);
+            jw_int(&w, "rtcm_dropped", e.rtcm_dropped);
+            if (e.rtcm_age_ms >= 0) {
+                jw_int(&w, "rtcm_age_ms", e.rtcm_age_ms);
+                snprintf(ip, sizeof ip, "%u.%u.%u.%u", e.rtcm_src_ip[0], e.rtcm_src_ip[1], e.rtcm_src_ip[2],
+                         e.rtcm_src_ip[3]);
+                jw_str(&w, "rtcm_from", ip);
+                jw_int(&w, "rtcm_last_type", e.rtcm_last_type);
+            } else {
+                jw_null(&w, "rtcm_age_ms");
+            }
+            jw_int(&w, "front_datagrams", e.front_datagrams);
+            jw_int(&w, "front_rejected", e.front_rejected);
+            if (e.front_age_ms >= 0) {
+                jw_int(&w, "front_age_ms", e.front_age_ms);
+                snprintf(ip, sizeof ip, "%u.%u.%u.%u", e.front_src_ip[0], e.front_src_ip[1], e.front_src_ip[2],
+                         e.front_src_ip[3]);
+                jw_str(&w, "front_from", ip);
+                jw_bool(&w, "sync_valid", e.sync_valid);
+                if (e.sync_used) {
+                    jw_num(&w, "sync_offset_us", e.sync_offset_us, 0);
+                    jw_num(&w, "sync_drift_ppm", (double)e.sync_drift_ppm, 2);
+                    jw_int(&w, "sync_rtt_min_us", e.sync_rtt_min_us);
+                    jw_num(&w, "sync_rms_us", (double)e.sync_resid_us, 0);
+                }
+                jw_int(&w, "sync_requests", e.sync_requests);
+                jw_int(&w, "sync_replies", e.sync_replies);
+                jw_int(&w, "sync_lost", e.sync_timeouts);
+            }
+            jw_int(&w, "aog_scans", e.aog_scans);
+            jw_int(&w, "aog_hellos", e.aog_hellos);
+        }
+        jw_end(&w, '}');
+    }
+
+    {
+        const rtcm_src_t *r = &s_rtcm_src;
+        const um980_stats_t *gs2 = um980_stats(&s_gnss);
+        int a = rtcm_src_active(r, now);
+        jw_obj(&w, "corrections");
+        jw_str(&w, "mode", rtcm_src_mode_name(r->mode));
+        if (a < 0) jw_null(&w, "active");
+        else jw_str(&w, "active", rtcm_src_name(a));
+        jw_int(&w, "switches", r->switches);
+        for (int k = 0; k < RTCM_SRC_N; k++) {
+            jw_obj(&w, rtcm_src_name(k));
+            jw_int(&w, "frames", r->s[k].frames);
+            jw_int(&w, "dropped", r->s[k].dropped);
+            if (r->s[k].t_last) jw_int(&w, "age_ms", (long long)((now - r->s[k].t_last) / 1000u));
+            else jw_null(&w, "age_ms");
+            jw_end(&w, '}');
+        }
+        jw_int(&w, "to_com1", gs2->rtcm_frames);
+        jw_int(&w, "com1_refused", gs2->rtcm_dropped);
+        jw_end(&w, '}');
+    }
 
     jw_obj(&w, "imu");
     jw_str(&w, "state", tm210_state_name(tm210_state(&s_imu)));
@@ -1732,6 +1884,8 @@ static void apply_live(const settings_t *s)
     imu_calib_set_psd(s->gyr_psd, s->acc_psd);
     pole_mount_set_height(s->ant_height_m);
     field_io_apply_settings(s);
+    eth_apply_settings(s);
+    rtcm_src_set_mode(&s_rtcm_src, s->rtcm_src);
     s_settings = *s;
 }
 
@@ -1959,6 +2113,8 @@ int main(void)
         /* Not at the line start: readers take lines starting with $ as NMEA. */
         printf("[paogi] sent on USB at 10 Hz (USB command 'paogi off' stops it)\n");
     }
+    printf("[eth] W5500 Ethernet setting: %s\n",
+           s_settings.eth_fitted ? "fitted ($PAOGI to the subnet broadcast, RTCM in)" : "not fitted");
 
     const um980_config_t gnss_cfg = {
         .pps_pin = PIN_UM980_PPS, .dual_antenna = dual_set, .verbose = true,
@@ -1970,6 +2126,11 @@ int main(void)
     s_baro_ok = s_settings.sensor_baro ? baro_start() : false;
     field_io_init();
     field_io_apply_settings(&s_settings);
+    rtcm_src_init(&s_rtcm_src, (uint64_t)APP_RTCM_SRC_HOLD_S * 1000000u);
+    rtcm_src_set_mode(&s_rtcm_src, s_settings.rtcm_src);
+    eth_init(rtcm_from_eth, field_io_usb_flow);
+    field_io_set_clock(eth_front_clock, NULL);
+    eth_apply_settings(&s_settings);
     usb_log_init();
 
     nav_antenna_t ant_sent = dual_set ? NAV_ANT_DUAL : NAV_ANT_SINGLE;
@@ -2096,7 +2257,8 @@ int main(void)
             }
         }
         worked |= usb_log_poll(now);
-        if (s_paogi_on) {
+        worked |= eth_poll(now);
+        if (s_paogi_on || s_settings.eth_fitted) {
             worked |= paogi_poll(now);
         }
 

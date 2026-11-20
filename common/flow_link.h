@@ -5,10 +5,16 @@
  * mirrors it byte for byte, so change both together.
  * firmware/tools/test_flow_link.c, pi/flow/tests/test_flow.cpp and
  * pi/flow/python/test_flow_link.py check the same example frame
- * (FLOW_LINK_EXAMPLE_HEX below). Design: plans/optical-flow-aiding.md.
+ * (FLOW_LINK_EXAMPLE_HEX, FLOW_LINK_EXAMPLE_TIME_REQ_HEX and
+ * FLOW_LINK_EXAMPLE_TIME_RESP_HEX below). Design: plans/optical-flow-aiding.md,
+ * plans/front-camera-unit.md.
  *
- * Direction: Pi -> Pico only, on a PIO UART. The Pico never talks back; it
- * triggers the camera and timestamps the strobe on GPIOs instead.
+ * Direction: Pi -> Pico on a PIO UART or the Pico's USB port; there the Pico
+ * never talks back, it triggers the camera and timestamps the strobe on
+ * GPIOs instead. Over UDP (the front camera unit on the Pico's W5500, one
+ * frame per datagram) the Pico also sends FLOW_MSG_TIME_REQ, and the unit
+ * answers each with FLOW_MSG_TIME_RESP: the clock sync that replaces the
+ * trigger and strobe wires.
  *
  * Frame (all multi-byte fields little-endian, floats IEEE 754 binary32):
  *
@@ -54,8 +60,30 @@
 #define FLOW_LINK_GAP_PERIOD 256u
 
 enum {
-    FLOW_MSG_FLOW = 1, /* flow between two consecutive frames */
+    FLOW_MSG_FLOW      = 1, /* flow between two consecutive frames (unit -> Pico) */
+    FLOW_MSG_TIME_REQ  = 2, /* clock sync request (Pico -> unit, UDP only)        */
+    FLOW_MSG_TIME_RESP = 3, /* clock sync reply (unit -> Pico, UDP only)          */
 };
+
+/* FLOW_MSG_TIME_REQ payload: u32 seq (the Pico's request number). The unit
+ * answers at once, from the socket the request came to. */
+#define FLOW_MSG_TIME_REQ_LEN 4u
+
+/* FLOW_MSG_TIME_RESP payload, byte offsets
+ * 0  u32 seq            copied from the request
+ * 4  u32 turnaround_us  unit's time from receiving the request to sending
+ *                       this reply [us] (the Pico takes it off the round trip)
+ * 8  u64 unit_rx_us     unit's clock when the request was received [us]:
+ *                       the same clock as pi_time_us in FLOW_MSG_FLOW
+ *                       (CLOCK_MONOTONIC on Linux), all 64 bits
+ */
+#define FLOW_MSG_TIME_RESP_LEN 16u
+
+typedef struct {
+    uint32_t seq;
+    uint32_t turnaround_us;
+    uint64_t unit_rx_us;
+} flow_msg_time_resp_t;
 
 /* FLOW_MSG_FLOW flags */
 #define FLOW_F_VALID     0x01u /* displacement usable (enough features tracked) */
@@ -104,6 +132,19 @@ typedef struct {
     "0ad7233c" "6f1203bb" "6f12033a"            /* disp x, disp y, stddev */    \
     "5700" "0c" "05"                            /* n, exposure, flags */        \
     "8ee4"                                      /* crc */
+
+/* Clock sync examples, checked by the same three tests: a request with seq 7,
+ * and its reply with turnaround 42 us and unit_rx_us 0x1234567890. */
+#define FLOW_LINK_EXAMPLE_TIME_REQ_HEX                                          \
+    "f710" "01" "02" "04"                       /* sync, version, type, len */  \
+    "07000000"                                  /* seq */                       \
+    "c41a"                                      /* crc */
+
+#define FLOW_LINK_EXAMPLE_TIME_RESP_HEX                                         \
+    "f710" "01" "03" "10"                       /* sync, version, type, len */  \
+    "07000000" "2a000000"                       /* seq, turnaround */           \
+    "9078563412000000"                          /* unit_rx_us */                \
+    "db31"                                      /* crc */
 
 static inline uint16_t flow_link_crc16(const uint8_t *p, size_t n)
 {
@@ -190,6 +231,76 @@ static inline size_t flow_link_encode_flow(const flow_msg_flow_t *m, uint8_t *ou
     out[FLOW_LINK_HEADER_LEN + FLOW_MSG_FLOW_LEN]      = (uint8_t)crc;
     out[FLOW_LINK_HEADER_LEN + FLOW_MSG_FLOW_LEN + 1u] = (uint8_t)(crc >> 8);
     return FLOW_LINK_FLOW_FRAME_LEN;
+}
+
+/* Wrap a payload of len bytes into a complete frame. Returns the frame
+ * length, or 0 if cap is too small or the payload too long. */
+static inline size_t flow_link_encode(uint8_t type, const uint8_t *payload, size_t len, uint8_t *out, size_t cap)
+{
+    const size_t n = FLOW_LINK_HEADER_LEN + len + FLOW_LINK_CRC_LEN;
+    if (len > FLOW_LINK_MAX_PAYLOAD || cap < n) return 0;
+    out[0] = FLOW_LINK_SYNC0;
+    out[1] = FLOW_LINK_SYNC1;
+    out[2] = FLOW_LINK_VERSION;
+    out[3] = type;
+    out[4] = (uint8_t)len;
+    if (len) memcpy(&out[FLOW_LINK_HEADER_LEN], payload, len);
+    const uint16_t crc = flow_link_crc16(&out[2], 3u + len);
+    out[FLOW_LINK_HEADER_LEN + len]      = (uint8_t)crc;
+    out[FLOW_LINK_HEADER_LEN + len + 1u] = (uint8_t)(crc >> 8);
+    return n;
+}
+
+/* Checks one whole frame (sync, version, length, CRC). Returns the payload
+ * length and sets *type, or -1 if it is not a good frame. */
+static inline int flow_link_check(const uint8_t *b, size_t n, uint8_t *type)
+{
+    if (n < FLOW_LINK_HEADER_LEN + FLOW_LINK_CRC_LEN || b[0] != FLOW_LINK_SYNC0 || b[1] != FLOW_LINK_SYNC1 ||
+        b[2] != FLOW_LINK_VERSION || b[4] > FLOW_LINK_MAX_PAYLOAD ||
+        n != (size_t)FLOW_LINK_HEADER_LEN + b[4] + FLOW_LINK_CRC_LEN) {
+        return -1;
+    }
+    const size_t   len = b[4];
+    const uint16_t crc = (uint16_t)(b[FLOW_LINK_HEADER_LEN + len] | (b[FLOW_LINK_HEADER_LEN + len + 1u] << 8));
+    if (flow_link_crc16(&b[2], 3u + len) != crc) return -1;
+    *type = b[3];
+    return (int)len;
+}
+
+#define FLOW_LINK_TIME_REQ_FRAME_LEN  (FLOW_LINK_HEADER_LEN + FLOW_MSG_TIME_REQ_LEN + FLOW_LINK_CRC_LEN)
+#define FLOW_LINK_TIME_RESP_FRAME_LEN (FLOW_LINK_HEADER_LEN + FLOW_MSG_TIME_RESP_LEN + FLOW_LINK_CRC_LEN)
+
+static inline size_t flow_link_encode_time_req(uint32_t seq, uint8_t *out, size_t cap)
+{
+    uint8_t p[FLOW_MSG_TIME_REQ_LEN];
+    flow_link_wr_u32(p, seq);
+    return flow_link_encode(FLOW_MSG_TIME_REQ, p, sizeof p, out, cap);
+}
+
+static inline int flow_link_decode_time_req(const uint8_t *payload, size_t len, uint32_t *seq)
+{
+    if (len != FLOW_MSG_TIME_REQ_LEN) return -1;
+    *seq = flow_link_rd_u32(payload);
+    return 0;
+}
+
+static inline size_t flow_link_encode_time_resp(const flow_msg_time_resp_t *m, uint8_t *out, size_t cap)
+{
+    uint8_t p[FLOW_MSG_TIME_RESP_LEN];
+    flow_link_wr_u32(&p[0], m->seq);
+    flow_link_wr_u32(&p[4], m->turnaround_us);
+    flow_link_wr_u32(&p[8], (uint32_t)m->unit_rx_us);
+    flow_link_wr_u32(&p[12], (uint32_t)(m->unit_rx_us >> 32));
+    return flow_link_encode(FLOW_MSG_TIME_RESP, p, sizeof p, out, cap);
+}
+
+static inline int flow_link_decode_time_resp(const uint8_t *payload, size_t len, flow_msg_time_resp_t *out)
+{
+    if (len != FLOW_MSG_TIME_RESP_LEN) return -1;
+    out->seq           = flow_link_rd_u32(&payload[0]);
+    out->turnaround_us = flow_link_rd_u32(&payload[4]);
+    out->unit_rx_us    = (uint64_t)flow_link_rd_u32(&payload[8]) | ((uint64_t)flow_link_rd_u32(&payload[12]) << 32);
+    return 0;
 }
 
 #endif /* FLOW_LINK_H */

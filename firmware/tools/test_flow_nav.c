@@ -44,6 +44,7 @@ typedef struct {
     double      height;      /* camera above ground when level             */
     int         strobe;      /* strobe wired                               */
     int         triggered;
+    int         jitter;      /* arrival jitter on the link                 */
     int         drop_at;     /* ordinal whose message carries FLOW_F_DROPPED, 0 = none */
     uint32_t    p_first, p_last;
 } scen_t;
@@ -151,6 +152,7 @@ static void run(const scen_t *s, result_t *res)
         .leverarm_m = { (float)s->leverarm[0], (float)s->leverarm[1], (float)s->leverarm[2] },
         .exposure_delay_us = STROBE_US, .strobe_window_us = 5000u, .fuse_period_s = 0.1f,
         .min_sd_mps = 0.05f, .max_mps = 20.0f, .max_tilt_rad = 0.6f, .min_features = 15,
+        .free_latency_us = LAT_US,
     };
     memset(res, 0, sizeof *res);
     s_t_ref = (double)(t_trig(s->p_first) - T0_US) * 1e-6;
@@ -199,12 +201,16 @@ static void run(const scen_t *s, result_t *res)
         for (uint32_t ord = ord_first + 1u; ; ord++) {
             uint32_t pb = flow_nav_period_of(ord);
             if (pb > s->p_last) break;
-            uint64_t arr = t_mid(pb) + LAT_US;
+            /* Arrival jitter (free-running test): 0 .. 2.4 ms, minimum every 9th frame. */
+            uint64_t arr = t_mid(pb) + LAT_US + (s->jitter ? (uint64_t)((ord * 5u) % 9u) * 300u : 0u);
             if (arr > t) break;
             if (arr <= t - 250u) continue;
             uint32_t pa = flow_nav_period_of(ord - 1u);
             flow_msg_flow_t m = { 0 };
             m.frame_seq = ord + 7000u; /* the Pi's own count, any offset */
+            /* The Pi's clock: any offset, wrapping its low 32 bits mid-run. */
+            m.pi_time_us = (uint32_t)(t_mid(pb) - t_mid(s->p_first) + 0xFFFE0000u);
+            m.pi_dt_us = (uint32_t)(t_mid(pb) - t_mid(pa));
             float d[2];
             flow_between(s, fn->r_cb, pa, pb, d);
             m.disp_x_rad = d[0];
@@ -333,12 +339,28 @@ int main(void)
     CHECK(r.fn.st.not_anchored > 200); /* 300..512 lost */
     CHECK_NEAR(r.min, 2.0, 0.01);
 
-    s = base("untriggered camera");
+    /* No trigger or strobe wired: timed by the Pi's clock, no gap needed. */
+    s = base("free-running, jitter, yaw, cam ahead");
     s.v_b[0] = 2.0;
+    s.w_b[2] = 0.5;
+    s.leverarm[0] = 1.0;
     s.triggered = 0;
+    s.jitter = 1;
     run(&s, &r);
-    CHECK(r.n == 0);
+    CHECK(r.n >= 10); /* from the start, not only after the gap */
+    CHECK_NEAR(r.min, 2.0, 0.02);
+    CHECK_NEAR(r.max, 2.0, 0.02);
     CHECK(r.fn.st.untriggered > 100);
+    CHECK(r.fn.st.not_anchored == 0);
+    CHECK(r.fn.st.free_resets == 0);
+
+    s = base("free-running, roll 0.2 rad/s standing");
+    s.w_b[0] = 0.2;
+    s.triggered = 0;
+    s.jitter = 1;
+    run(&s, &r);
+    CHECK(r.n >= 10);
+    CHECK(r.max < 0.02);
 
     printf(fails ? "test_flow_nav: %d FAILED\n" : "test_flow_nav: OK\n", fails);
     return fails ? EXIT_FAILURE : EXIT_SUCCESS;
