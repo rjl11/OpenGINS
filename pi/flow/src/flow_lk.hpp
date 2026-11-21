@@ -7,6 +7,14 @@
 // normalised image coordinates (x/z, y/z; radians near the centre) after
 // undistortion. Rotation is NOT removed and nothing is divided by time or
 // scaled by height: the Pico does that (plans/optical-flow-aiding.md).
+//
+// Fallback: when too few features survive (smooth concrete, fine soil, dusk),
+// phase correlation on a square in the image centre gives the shift instead.
+// It needs texture, not corners. Idea from Clover's optical_flow.cpp
+// (CopterExpress/clover, MIT), with the shift undistorted around the
+// calibrated principal point. It sees one translation for the whole square, so
+// yaw within a frame and repeating patterns (crop rows) can fool it; the
+// response gates it.
 #pragma once
 
 #include <string>
@@ -41,6 +49,8 @@ struct FlowResult {
     double stddev = 0;  // 1-sigma of each axis
     int    n_tracked = 0;
     bool   valid = false;
+    bool   phase = false;   // from the phase-correlation fallback
+    double response = 0;    // its peak response, 0..1 (phase only)
 };
 
 struct FlowParams {
@@ -51,6 +61,13 @@ struct FlowParams {
     int    levels = 2;        // LK pyramid levels above the base
     double outlier_px = 1.0;  // max distance from the median shift [px]
     int    border_px = 8;     // features closer to the edge are dropped
+
+    // Phase-correlation fallback (estimates, not yet tuned on real ground).
+    bool   phase_fallback = true;
+    double phase_roi_rad = 0.5;       // angular width of the centre square
+    double phase_min_response = 0.2;  // lower: result invalid
+    double phase_min_contrast = 2.0;  // grey-level 1-sigma in the square; lower: invalid
+    double phase_sd_px = 0.1;         // 1-sigma [px] at response 1, grows as 1/response
 };
 
 class FlowEstimator {
@@ -66,6 +83,14 @@ public:
     void       reset();
 
     int n_detect() const { return n_detect_; }  // corner detections run
+    int n_phase() const { return n_phase_; }    // phase correlations run
+
+    // Phase correlation alone, prev to cur (used by the fallback and tests).
+    FlowResult phase(const cv::Mat& prev, const cv::Mat& cur);
+
+    // Features located in the last frame given to update() (processing-size
+    // pixels), for the preview page.
+    const std::vector<cv::Point2f>& points() const { return pts_; }
 
 private:
     void       detect(const cv::Mat& img, std::vector<cv::Point2f>& pts);
@@ -77,11 +102,14 @@ private:
     cv::Mat                  prev_;
     std::vector<cv::Point2f> pts_;  // features located in prev_
     int                      n_detect_ = 0;
+    int                      n_phase_ = 0;
 
     // Scratch, kept to avoid allocations per frame.
     std::vector<cv::Point2f> p1_;
     std::vector<uchar>       st_;
     std::vector<float>       err_;
+    cv::Rect                 roi_;   // phase-correlation square, set on first use
+    cv::Mat                  hann_, fa_, fb_;
 };
 
 }  // namespace flow

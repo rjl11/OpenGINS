@@ -13,7 +13,9 @@
  *  - Socket 2: the front camera unit on APP_ETH_FRONT_PORT (5800,
  *    plans/front-camera-unit.md): one common/flow_link.h frame per
  *    datagram, handed to the flow_in callback with its arrival time, the
- *    same path as frames on USB. Once the unit has sent a datagram, the
+ *    same path as frames on USB. Datagrams that are not flow_link frames
+ *    are dropped; the first good sender is the unit, and another one is
+ *    ignored until it has been silent for 5 s. Once the unit has sent a datagram, the
  *    Pico sends it FLOW_MSG_TIME_REQ (every 1 s, faster at first) and
  *    keeps the clock sync (app/clock_sync.h) from its FLOW_MSG_TIME_RESP
  *    replies; eth_front_clock() hands it to the flow timing. Settings for
@@ -46,11 +48,18 @@ typedef enum {
     ETH_UP           /* link up, sockets open                      */
 } eth_state_t;
 
-/* Takes one whole RTCM frame; false if it couldn't be queued (the frame is
- * then counted as dropped). */
-typedef bool (*eth_rtcm_out_fn)(const uint8_t *frame, size_t len);
-/* Takes one datagram from the front camera unit (a flow_link frame). */
-typedef bool (*eth_flow_in_fn)(const uint8_t *frame, size_t len, uint64_t t_arrival_us);
+/* What became of an RTCM frame handed to rtcm_out. */
+typedef enum {
+    ETH_RTCM_FORWARDED = 0,  /* queued for the receiver's COM1                  */
+    ETH_RTCM_NOT_SELECTED,   /* another correction source is active (rtcm_src.h) */
+    ETH_RTCM_REFUSED         /* selected, but the receiver driver refused it     */
+} eth_rtcm_result_t;
+
+/* Takes one whole RTCM frame. */
+typedef eth_rtcm_result_t (*eth_rtcm_out_fn)(const uint8_t *frame, size_t len);
+/* Takes one checked flow_link message from the front camera unit (type and
+ * payload; field_io_link_frame()); false if it is not usable. */
+typedef bool (*eth_flow_in_fn)(uint8_t type, const uint8_t *payload, size_t len, uint64_t t_arrival_us);
 
 typedef struct {
     eth_state_t state;
@@ -67,14 +76,16 @@ typedef struct {
     uint32_t rtcm_bytes;
     uint32_t rtcm_frames;       /* good frames                            */
     uint32_t rtcm_crc_errors;
-    uint32_t rtcm_forwarded;    /* taken by rtcm_out                      */
-    uint32_t rtcm_dropped;      /* refused by rtcm_out                    */
+    uint32_t rtcm_forwarded;    /* queued for COM1                        */
+    uint32_t rtcm_dropped;      /* not selected: another source is active */
+    uint32_t rtcm_refused;      /* selected, refused by the receiver      */
     int32_t  rtcm_age_ms;       /* since the last datagram, -1 = none yet */
     uint8_t  rtcm_src_ip[4];
     unsigned rtcm_last_type;    /* message number of the last good frame  */
 
     uint32_t front_datagrams;   /* from the front camera unit             */
-    uint32_t front_rejected;    /* refused by flow_in (bad frame)         */
+    uint32_t front_rejected;    /* not a flow_link frame, or not usable   */
+    uint32_t front_other;       /* from a second sender, ignored          */
     int32_t  front_age_ms;      /* since the last datagram, -1 = none yet */
     uint8_t  front_src_ip[4];
 
@@ -84,6 +95,8 @@ typedef struct {
     uint32_t sync_rtt_min_us;   /* shortest round trip in the window      */
     float    sync_resid_us;     /* rms of the replies used about the fit  */
     uint32_t sync_used, sync_requests, sync_replies, sync_timeouts, sync_resets;
+    uint32_t sync_send_errors;  /* requests the W5500 did not send        */
+    uint32_t unit_cfg_sent;     /* FLOW_MSG_UNIT_CFG to the front unit    */
 
     uint32_t aog_scans;         /* scan requests answered                 */
     uint32_t aog_hellos;        /* hellos answered                        */

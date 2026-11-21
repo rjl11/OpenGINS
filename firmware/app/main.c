@@ -27,6 +27,7 @@
 #include "eth.h"
 #include "rtcm_src.h"
 #include "field_io.h"
+#include "front_imu.h"
 #include "geoid.h"
 #include "ground_point.h"
 #include "imu_calib.h"
@@ -48,6 +49,8 @@
 
 #define IMU_RX_BITS         13 /* 8 KB, about 200 ms at 39 kB/s */
 #define GNSS_RX_BITS        12 /* 4 KB */
+#define IMU_TX_BITS         9  /* 512 B: configuration commands only */
+#define GNSS_TX_BITS        11 /* 2 KB: a whole RTCM frame (<= 1029 B) and room for the next */
 #define USB_WAIT_MS         3000
 #define STATUS_PERIOD_US    1000000u
 #define BARO_RETRY_US       5000000u
@@ -55,6 +58,8 @@
 
 static uint8_t s_imu_rx[1u << IMU_RX_BITS] __attribute__((aligned(1u << IMU_RX_BITS)));
 static uint8_t s_gnss_rx[1u << GNSS_RX_BITS] __attribute__((aligned(1u << GNSS_RX_BITS)));
+static uint8_t s_imu_tx[1u << IMU_TX_BITS];
+static uint8_t s_gnss_tx[1u << GNSS_TX_BITS];
 
 static uart_dma_t s_imu_port, s_gnss_port;
 static tm210_t s_imu;
@@ -63,6 +68,17 @@ static bmp581_t s_baro;
 static bool s_baro_ok;
 
 static tm210_sample_t s_last_imu;
+
+/* The IMU core 1 runs on: the roof TM210, or the front unit's TM171 as its
+ * backup (plans/front-camera-unit.md, "Backup IMU for the roof TM210";
+ * imu_source_poll()). The TM171 also gives the chassis tilt for the
+ * cab-roll ground point (front_imu.h). */
+typedef enum { IMU_SRC_ROOF = 0, IMU_SRC_FRONT = 1 } imu_src_t;
+static imu_src_t   s_imu_src;
+static front_imu_t s_fimu;
+static uint64_t    s_roof_lost_since, s_roof_live_since;
+static uint32_t    s_imu_switches;
+#define FRONT_IMU_BOOT_WAIT_US 10000000u /* the TM210 takes seconds to come up after boot */
 static um980_nav_t s_last_nav;
 static bmp581_sample_t s_last_baro;
 static bool s_have_nav;
@@ -321,6 +337,20 @@ static void nav_params_from_settings(nav_params_t *p, const settings_t *s)
     imu_calib_acc_calibration(p->acc_misalignment, p->acc_fixed_bias);
     imu_calib_mag_calibration(p->mag_misalignment, p->mag_fixed_bias);
     imu_calib_gyr_misalignment(p->gyr_misalignment);
+    if (s_imu_src == IMU_SRC_FRONT) {
+        /* On the TM171: the antenna seen from it, and none of the TM210's
+         * learned calibration or magnetometer (all zero = identity). The
+         * cab sway between the antenna and the chassis is not modelled. */
+        for (int i = 0; i < 3; i++) p->leverarm_m[i] = s->leverarm_m[i] - s->front_imu_lever_m[i];
+        memset(p->gyr_fixed_bias, 0, sizeof p->gyr_fixed_bias);
+        memset(p->gyr_misalignment, 0, sizeof p->gyr_misalignment);
+        memset(p->acc_misalignment, 0, sizeof p->acc_misalignment);
+        memset(p->acc_fixed_bias, 0, sizeof p->acc_fixed_bias);
+        memset(p->mag_misalignment, 0, sizeof p->mag_misalignment);
+        memset(p->mag_fixed_bias, 0, sizeof p->mag_fixed_bias);
+        p->use_mag = false;
+        p->pole_aid = false;
+    }
 }
 
 static bool baro_start(void)
@@ -670,6 +700,8 @@ typedef struct {
      * whenever source is not none, with or without a ground point. */
     bool        ground;
     float       ant_height_m;
+    bool        cab;       /* the cab-roll ground point (ground_point_cab()) */
+    float       chassis_roll_deg, chassis_pitch_deg; /* the TM171's, when cab */
     bool        tilted;    /* the ground point used the attitude (gate passed) */
     float       tilt_deg;  /* body down axis from the vertical, if an attitude */
     float       axis_sd_deg; /* its 1-sigma from the INS, -1 = no INS attitude */
@@ -751,7 +783,19 @@ static void best_position(const nav_output_t *o, uint64_t now, best_pos_t *b)
         for (int i = 0; i < 3; i++) off[i] = h_ant * u[i];
     }
     double ant[3] = { b->ant_lat_deg / DEG, b->ant_lon_deg / DEG, b->ant_h_ell_m }, gp[3];
-    ground_point(ant, att, off, gp);
+    /* Tractor with a front unit and a roll centre set: the part below the
+     * cab's roll centre follows the chassis (the TM171), not the cab. */
+    const float h_rc = s_settings.cab_roll_centre_m;
+    float ch_roll, ch_pitch;
+    if (att != NULL && settings_platform(&s_boot_settings) == APP_PLATFORM_TRACTOR && h_rc > 0.0f && h_rc < h_ant &&
+        front_imu_tilt(&s_fimu, now, 500000u, &ch_roll, &ch_pitch)) {
+        ground_point_cab(ant, att, ch_roll, ch_pitch, h_ant, h_rc, gp);
+        b->cab = true;
+        b->chassis_roll_deg = (float)(ch_roll * DEG);
+        b->chassis_pitch_deg = (float)(ch_pitch * DEG);
+    } else {
+        ground_point(ant, att, off, gp);
+    }
     b->ground = true;
     b->ant_height_m = h_ant;
     b->tilted = att != NULL;
@@ -773,15 +817,18 @@ static void best_position(const nav_output_t *o, uint64_t now, best_pos_t *b)
  * will call rtcm_offer() with RTCM_SRC_BT the same way. */
 static rtcm_src_t s_rtcm_src;
 
-static bool rtcm_offer(unsigned src, const uint8_t *frame, size_t len)
+static eth_rtcm_result_t rtcm_offer(unsigned src, const uint8_t *frame, size_t len)
 {
     if (!rtcm_src_accept(&s_rtcm_src, src, time_us_64())) {
-        return false;
+        return ETH_RTCM_NOT_SELECTED;
     }
-    return um980_send_rtcm(&s_gnss, frame, len);
+    return um980_send_rtcm(&s_gnss, frame, len) ? ETH_RTCM_FORWARDED : ETH_RTCM_REFUSED;
 }
 
-static bool rtcm_from_eth(const uint8_t *frame, size_t len) { return rtcm_offer(RTCM_SRC_ETH, frame, len); }
+static eth_rtcm_result_t rtcm_from_eth(const uint8_t *frame, size_t len)
+{
+    return rtcm_offer(RTCM_SRC_ETH, frame, len);
+}
 
 static bool     s_paogi_on;     /* on USB: tractor platform in effect since boot */
 static double   s_paogi_gyr[3]; /* corrected gyro summed since the last sentence */
@@ -964,23 +1011,27 @@ static void print_eth(uint64_t now)
     printf("  paogi %lu (err %lu)  rtcm %lu frames", (unsigned long)e.paogi_sent,
            (unsigned long)e.paogi_errors, (unsigned long)e.rtcm_frames);
     if (e.rtcm_frames || e.rtcm_crc_errors) {
-        printf(" (crc %lu, dropped %lu, last %u, %ld ms ago from %u.%u.%u.%u)",
-               (unsigned long)e.rtcm_crc_errors, (unsigned long)e.rtcm_dropped, e.rtcm_last_type,
+        printf(" (crc %lu, other source %lu, refused %lu, last %u, %ld ms ago from %u.%u.%u.%u)",
+               (unsigned long)e.rtcm_crc_errors, (unsigned long)e.rtcm_dropped,
+               (unsigned long)e.rtcm_refused, e.rtcm_last_type,
                (long)e.rtcm_age_ms, e.rtcm_src_ip[0], e.rtcm_src_ip[1], e.rtcm_src_ip[2], e.rtcm_src_ip[3]);
     }
     printf("\n");
     if (e.front_datagrams) {
-        printf("      front unit %u.%u.%u.%u  %lu datagrams (%lu bad), %ld ms ago\n", e.front_src_ip[0],
-               e.front_src_ip[1], e.front_src_ip[2], e.front_src_ip[3], (unsigned long)e.front_datagrams,
-               (unsigned long)e.front_rejected, (long)e.front_age_ms);
+        printf("      front unit %u.%u.%u.%u  %lu datagrams (%lu bad, %lu from another sender), %ld ms ago\n",
+               e.front_src_ip[0], e.front_src_ip[1], e.front_src_ip[2], e.front_src_ip[3],
+               (unsigned long)e.front_datagrams, (unsigned long)e.front_rejected, (unsigned long)e.front_other,
+               (long)e.front_age_ms);
         printf("      clock sync %s", e.sync_valid ? "valid" : "not valid");
         if (e.sync_used) {
             printf("  offset %.0f us  drift %+.1f ppm  rtt min %lu us  rms %.0f us (%lu used)", e.sync_offset_us,
                    (double)e.sync_drift_ppm, (unsigned long)e.sync_rtt_min_us, (double)e.sync_resid_us,
                    (unsigned long)e.sync_used);
         }
-        printf("  req %lu  replies %lu  lost %lu  restarts %lu\n", (unsigned long)e.sync_requests,
+        printf("  req %lu  replies %lu  lost %lu  restarts %lu", (unsigned long)e.sync_requests,
                (unsigned long)e.sync_replies, (unsigned long)e.sync_timeouts, (unsigned long)e.sync_resets);
+        if (e.sync_send_errors) printf("  send errors %lu", (unsigned long)e.sync_send_errors);
+        printf("  settings sent %lu\n", (unsigned long)e.unit_cfg_sent);
     }
 }
 
@@ -1054,6 +1105,23 @@ static void print_status(uint64_t now, uint32_t baro_hz)
                    (double)r->gyr_dps[0], (double)r->gyr_dps[1], (double)r->gyr_dps[2],
                    (double)r->acc[0], (double)r->acc[1], (double)r->acc[2],
                    (unsigned long)r->pass, (unsigned long)r->windows);
+        }
+    }
+    {
+        const front_imu_stats_t *fs = &s_fimu.st;
+        float r, p;
+        const uint64_t tnow = time_us_64();
+        if (fs->batches || s_imu_src != IMU_SRC_ROOF) {
+            printf("      source %s (switches %lu)  front TM171: %lu batches, %lu samples, lost %lu, unit gaps %lu,"
+                   " synced %lu, %s",
+                   s_imu_src == IMU_SRC_FRONT ? "FRONT TM171" : "roof TM210", (unsigned long)s_imu_switches,
+                   (unsigned long)fs->batches, (unsigned long)fs->samples, (unsigned long)fs->lost,
+                   (unsigned long)fs->unit_gaps, (unsigned long)fs->synced,
+                   front_imu_fresh(&s_fimu, tnow, APP_FRONT_IMU_FRESH_MS * 1000u) ? "live" : "not live");
+            if (front_imu_tilt(&s_fimu, tnow, 500000u, &r, &p)) {
+                printf(", chassis roll %+.2f pitch %+.2f deg", (double)r * DEG, (double)p * DEG);
+            }
+            printf("\n");
         }
     }
     print_calib();
@@ -1200,6 +1268,10 @@ static void print_status(uint64_t now, uint32_t baro_hz)
             } else {
                 printf(" (no INS attitude)");
             }
+            if (bp.cab) {
+                printf(", cab roll centre %.2f m, chassis roll %+.2f pitch %+.2f deg",
+                       (double)s_settings.cab_roll_centre_m, (double)bp.chassis_roll_deg, (double)bp.chassis_pitch_deg);
+            }
             printf("\n      antenna lat %.8f  lon %.8f  h %.3f m\n", bp.ant_lat_deg, bp.ant_lon_deg, bp.ant_h_ell_m);
         }
     }
@@ -1337,6 +1409,7 @@ static void publish_status_json(uint64_t now, uint32_t baro_hz)
             jw_int(&w, "rtcm_crc_errors", e.rtcm_crc_errors);
             jw_int(&w, "rtcm_forwarded", e.rtcm_forwarded);
             jw_int(&w, "rtcm_dropped", e.rtcm_dropped);
+            jw_int(&w, "rtcm_refused", e.rtcm_refused);
             if (e.rtcm_age_ms >= 0) {
                 jw_int(&w, "rtcm_age_ms", e.rtcm_age_ms);
                 snprintf(ip, sizeof ip, "%u.%u.%u.%u", e.rtcm_src_ip[0], e.rtcm_src_ip[1], e.rtcm_src_ip[2],
@@ -1348,6 +1421,8 @@ static void publish_status_json(uint64_t now, uint32_t baro_hz)
             }
             jw_int(&w, "front_datagrams", e.front_datagrams);
             jw_int(&w, "front_rejected", e.front_rejected);
+            jw_int(&w, "front_other", e.front_other);
+            jw_int(&w, "unit_cfg_sent", e.unit_cfg_sent);
             if (e.front_age_ms >= 0) {
                 jw_int(&w, "front_age_ms", e.front_age_ms);
                 snprintf(ip, sizeof ip, "%u.%u.%u.%u", e.front_src_ip[0], e.front_src_ip[1], e.front_src_ip[2],
@@ -1363,6 +1438,7 @@ static void publish_status_json(uint64_t now, uint32_t baro_hz)
                 jw_int(&w, "sync_requests", e.sync_requests);
                 jw_int(&w, "sync_replies", e.sync_replies);
                 jw_int(&w, "sync_lost", e.sync_timeouts);
+                jw_int(&w, "sync_send_errors", e.sync_send_errors);
             }
             jw_int(&w, "aog_scans", e.aog_scans);
             jw_int(&w, "aog_hellos", e.aog_hellos);
@@ -1405,6 +1481,25 @@ static void publish_status_json(uint64_t now, uint32_t baro_hz)
     } else {
         jw_null(&w, "temp_c");
         jw_null(&w, "qos");
+    }
+    jw_str(&w, "source", s_imu_src == IMU_SRC_FRONT ? "front" : "roof");
+    jw_int(&w, "source_switches", s_imu_switches);
+    {
+        const front_imu_stats_t *fs = &s_fimu.st;
+        float r, p;
+        const uint64_t tnow = time_us_64();
+        jw_obj(&w, "front");
+        jw_int(&w, "batches", fs->batches);
+        jw_int(&w, "samples", fs->samples);
+        jw_int(&w, "lost", fs->lost);
+        jw_int(&w, "unit_gaps", fs->unit_gaps);
+        jw_int(&w, "synced", fs->synced);
+        jw_bool(&w, "live", front_imu_fresh(&s_fimu, tnow, APP_FRONT_IMU_FRESH_MS * 1000u));
+        if (front_imu_tilt(&s_fimu, tnow, 500000u, &r, &p)) {
+            jw_num(&w, "chassis_roll_deg", (double)r * DEG, 2);
+            jw_num(&w, "chassis_pitch_deg", (double)p * DEG, 2);
+        }
+        jw_end(&w, '}');
     }
     if (tm210_state(&s_imu) == TM210_ST_RUN) {
         jw_vec3(&w, "acc_mps2", s_last_imu.acc, 3);
@@ -1573,6 +1668,11 @@ static void publish_status_json(uint64_t now, uint32_t baro_hz)
         if (bp.ground) {
             jw_num(&w, "ant_height_m", (double)bp.ant_height_m, 3);
             jw_bool(&w, "tilted", bp.tilted);
+            jw_bool(&w, "cab_roll", bp.cab);
+            if (bp.cab) {
+                jw_num(&w, "chassis_roll_deg", (double)bp.chassis_roll_deg, 2);
+                jw_num(&w, "chassis_pitch_deg", (double)bp.chassis_pitch_deg, 2);
+            }
             if (bp.axis_sd_deg >= 0.0f) {
                 jw_num(&w, "tilt_deg", (double)bp.tilt_deg, 1);
                 jw_num(&w, "axis_sd_deg", (double)bp.axis_sd_deg, 2);
@@ -1868,6 +1968,69 @@ static void publish_calib_json(void)
 }
 #endif
 
+/* One TM171 batch from the front unit: its samples on the Pico clock in body
+ * axes; to core 1 while the TM171 is the source. */
+static void front_batch(const uint8_t *payload, size_t len, uint64_t t_arrival_us)
+{
+    flow_msg_imu_batch_t b;
+    if (flow_link_decode_imu_batch(payload, len, &b) != 0) {
+        s_fimu.st.bad++;
+        return;
+    }
+    front_imu_sample_t smp[FLOW_IMU_BATCH_MAX];
+    const unsigned k = front_imu_batch(&s_fimu, &b, t_arrival_us, smp);
+    if (s_imu_src != IMU_SRC_FRONT) return;
+    for (unsigned i = 0; i < k; i++) {
+        nav_imu_t n;
+        memset(&n, 0, sizeof n);
+        n.t_us = smp[i].t_us;
+        n.dt_s = smp[i].dt_s;
+        memcpy(n.acc, smp[i].acc, sizeof n.acc);
+        memcpy(n.gyr, smp[i].gyr, sizeof n.gyr);
+        nav_push_imu(&n);
+        field_io_imu(&n);
+        usb_log_imu(&n, false);
+        paogi_gyro(n.gyr);
+    }
+}
+
+/* The roof TM210 lost for APP_FRONT_IMU_BACKUP_AFTER_MS with the TM171 live
+ * (and the backup on): core 1 switches to the TM171 and re-initialises with
+ * its lever arm. Back to the TM210 once it has run for
+ * APP_FRONT_IMU_BACKUP_BACK_MS, or at once if the TM171 is gone too. */
+static void imu_source_poll(uint64_t now)
+{
+    const uint64_t fresh = APP_FRONT_IMU_FRESH_MS * 1000u;
+    const bool roof_live = tm210_state(&s_imu) == TM210_ST_RUN && s_last_imu.t_us != 0 &&
+                           (now < s_last_imu.t_us || now - s_last_imu.t_us < fresh);
+    const bool front_live = front_imu_fresh(&s_fimu, now, fresh);
+    if (roof_live) {
+        if (s_roof_live_since == 0) s_roof_live_since = now;
+        s_roof_lost_since = 0;
+    } else {
+        if (s_roof_lost_since == 0) s_roof_lost_since = now;
+        s_roof_live_since = 0;
+    }
+    imu_src_t want = s_imu_src;
+    if (s_imu_src == IMU_SRC_ROOF) {
+        if (!roof_live && front_live && s_settings.front_imu_backup && now > FRONT_IMU_BOOT_WAIT_US &&
+            now - s_roof_lost_since >= APP_FRONT_IMU_BACKUP_AFTER_MS * 1000u) {
+            want = IMU_SRC_FRONT;
+        }
+    } else if (roof_live && (!front_live || !s_settings.front_imu_backup ||
+                             now - s_roof_live_since >= APP_FRONT_IMU_BACKUP_BACK_MS * 1000u)) {
+        want = IMU_SRC_ROOF;
+    }
+    if (want == s_imu_src) return;
+    s_imu_src = want;
+    s_imu_switches++;
+    nav_params_t p;
+    nav_params_from_settings(&p, &s_settings);
+    nav_set_params(&p);
+    printf("[imu] source now the %s; the filter re-initialises\n",
+           want == IMU_SRC_FRONT ? "front unit's TM171 (roof TM210 lost)" : "roof TM210");
+}
+
 #if APP_WEB_BUILT
 static uint64_t s_reboot_at;
 
@@ -1886,6 +2049,11 @@ static void apply_live(const settings_t *s)
     field_io_apply_settings(s);
     eth_apply_settings(s);
     rtcm_src_set_mode(&s_rtcm_src, s->rtcm_src);
+    {
+        const float k = 0.017453293f;
+        const float rpy[3] = { s->front_imu_rpy_deg[0] * k, s->front_imu_rpy_deg[1] * k, s->front_imu_rpy_deg[2] * k };
+        front_imu_set_mount(&s_fimu, rpy);
+    }
     s_settings = *s;
 }
 
@@ -2089,9 +2257,9 @@ int main(void)
 #endif
 
     if (!uart_dma_init(&s_imu_port, PIN_TM210_UART, PIN_TM210_TX, PIN_TM210_RX, TM210_BAUD,
-                       s_imu_rx, IMU_RX_BITS) ||
+                       s_imu_rx, IMU_RX_BITS, s_imu_tx, IMU_TX_BITS) ||
         !uart_dma_init(&s_gnss_port, PIN_UM980_UART, PIN_UM980_TX, PIN_UM980_RX, UM980_BAUD,
-                       s_gnss_rx, GNSS_RX_BITS)) {
+                       s_gnss_rx, GNSS_RX_BITS, s_gnss_tx, GNSS_TX_BITS)) {
         panic("no free DMA channel");
     }
 
@@ -2128,8 +2296,20 @@ int main(void)
     field_io_apply_settings(&s_settings);
     rtcm_src_init(&s_rtcm_src, (uint64_t)APP_RTCM_SRC_HOLD_S * 1000000u);
     rtcm_src_set_mode(&s_rtcm_src, s_settings.rtcm_src);
-    eth_init(rtcm_from_eth, field_io_usb_flow);
+    eth_init(rtcm_from_eth, field_io_link_frame);
     field_io_set_clock(eth_front_clock, NULL);
+    {
+        const float k = 0.017453293f;
+        front_imu_config_t fc = {
+            .mount_rpy_rad = { s_settings.front_imu_rpy_deg[0] * k, s_settings.front_imu_rpy_deg[1] * k,
+                               s_settings.front_imu_rpy_deg[2] * k },
+            .tilt_tau_s = APP_FRONT_TILT_TAU_S, .acc_gate = APP_FRONT_TILT_ACC_GATE,
+            .free_latency_us = APP_FRONT_IMU_FREE_LATENCY_US,
+        };
+        front_imu_init(&s_fimu, &fc);
+        front_imu_set_clock(&s_fimu, eth_front_clock, NULL);
+        field_io_set_imu_batch_fn(front_batch);
+    }
     eth_apply_settings(&s_settings);
     usb_log_init();
 
@@ -2163,14 +2343,17 @@ int main(void)
             n.mag_new = is.mag_new;
             imu_calib_push(&is, tm210_stats(&s_imu)); /* raw, before the correction */
             imu_calib_correct(n.gyr, tm210_stats(&s_imu));
-            nav_push_imu(&n);
-            field_io_imu(&n);
-            usb_log_imu(&n, is.gap);
-            paogi_gyro(n.gyr);
+            if (s_imu_src == IMU_SRC_ROOF) {
+                nav_push_imu(&n);
+                field_io_imu(&n);
+                usb_log_imu(&n, is.gap);
+                paogi_gyro(n.gyr);
+            }
             noise_push(&is);
             s_last_imu = is;
             worked = true;
         }
+        imu_source_poll(time_us_64());
 
         /* GNSS: epochs flow once the receiver is configured. */
         um980_nav_t gn;

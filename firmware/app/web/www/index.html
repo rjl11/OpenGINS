@@ -115,6 +115,8 @@ function sensors(d){
     w.state==="ap"?(w.ap_clients||0)+" client(s)":has(w.rssi_dbm)?w.rssi_dbm+" dBm":w.ssid||""));
   if(e&&e.state!=="off")o.push(e.state==="up"?chip(e.paogi_errors>e.paogi_sent/100?"warn":"ok","Ethernet","up",e.ip+(has(e.rtcm_age_ms)&&e.rtcm_age_ms<3000?" · RTCM in":"")):
     chip(e.state==="not_found"?"bad":"warn","Ethernet",e.state==="not_found"?"missing":"no link",e.state==="not_found"?"W5500 not answering":"no cable"));
+  if(e&&has(e.front_age_ms)&&e.front_age_ms<5000&&e.front_from)o.push('<a class="chip ok" style="color:inherit;text-decoration:none" target="_blank" href="http://'+E(e.front_from)+':8080/">'+
+    '<div class="n">Front camera</div><div class="st">preview ›</div><div class="d num">'+E(e.front_from)+(e.sync_valid?" · synced":"")+' · from Ethernet only</div></a>');
   if(pl)o.push(chip(pl.state==="held"?"ok":pl.state==="planted"?"warn":"off","Pole",pl.state,pl.plants+" plants · "+pl.yaw_fits+" yaw fits"));
   if(c){const k=["gyro_bias","accelerometer","magnetometer","gyro_matrix"],n=k.filter(x=>String(c[x]||"").startsWith("in use")).length;
     o.push(chip(c.imu_id!=="ok"?"warn":n?"ok":"off","Calibration",n+" / 4 in use",c.imu_id==="ok"?(c.still?"still":"moving"):"IMU id "+c.imu_id));}

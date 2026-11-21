@@ -167,6 +167,7 @@ gcc -O2 -Wall -Wextra -I firmware/app firmware/tools/test_rtcm_frame.c firmware/
 gcc -O2 -Wall -Wextra -I firmware/app firmware/tools/test_aog_pgn.c firmware/app/aog_pgn.c firmware/app/rtcm_src.c -o temp/test_aog_pgn && temp/test_aog_pgn
 gcc -O2 -Wall -Wextra -I firmware/app firmware/tools/test_clock_sync.c firmware/app/clock_sync.c -lm -o temp/test_clock_sync && temp/test_clock_sync
 gcc -O2 -Wall -Wextra -I firmware/app -I firmware/drivers/flow_io -I common firmware/app/flow_nav.c firmware/tools/test_flow_nav.c -lm -o temp/test_flow_nav && temp/test_flow_nav
+gcc -O2 -Wall -Wextra -I firmware/app -I firmware/drivers/flow_io -I common firmware/app/front_imu.c firmware/tools/test_front_imu.c -lm -o temp/test_front_imu && temp/test_front_imu
 gcc -O2 -Wall -Wextra -I common firmware/tools/test_flow_link.c -o temp/test_flow_link && temp/test_flow_link
 gcc -O2 -Wall -Wextra -I firmware/app firmware/tools/test_speed_ppm.c firmware/app/speed_ppm.c -lm -o temp/test_speed_ppm && temp/test_speed_ppm
 gcc -O2 -Wall -Wextra -I firmware/app firmware/tools/test_geoid.c firmware/app/geoid.c firmware/app/geoid_grid.c -lm -o temp/test_geoid && temp/test_geoid geoid/SWEN17_RH2000.txt

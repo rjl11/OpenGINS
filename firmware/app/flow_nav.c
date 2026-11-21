@@ -54,7 +54,7 @@ void flow_nav_set_geometry(flow_nav_t *s, float height_m, float cam_yaw_rad, con
     for (int i = 0; i < 3; i++) s->cfg.leverarm_m[i] = leverarm_m[i];
     set_rotation(s);
     s->win_n = 0;
-    s->win_vx = s->win_vy = s->win_var = s->win_t = 0.0;
+    s->win_vx = s->win_vy = s->win_var = s->win_rel2 = s->win_t = 0.0;
 }
 
 void flow_nav_gyro(flow_nav_t *s, uint64_t t_us, const float gyr_b[3])
@@ -141,9 +141,9 @@ static uint64_t exposure_mid(flow_nav_t *s, uint32_t ordinal, uint32_t exposure_
 }
 
 /* Free-running: tracks the clock offset with every message (flow_nav.h). */
-static void free_track(flow_nav_t *s, const flow_msg_flow_t *m, uint64_t t_arr)
+static void free_track(flow_nav_t *s, uint32_t pi_time_us, uint64_t t_arr)
 {
-    const uint32_t off = (uint32_t)t_arr - m->pi_time_us;
+    const uint32_t off = (uint32_t)t_arr - pi_time_us;
     if (!s->free_have) {
         s->free_have = true;
         s->free_off = off;
@@ -166,7 +166,24 @@ static void free_track(flow_nav_t *s, const flow_msg_flow_t *m, uint64_t t_arr)
     }
 }
 
-bool flow_nav_message(flow_nav_t *s, const flow_msg_flow_t *m, uint64_t t_arrival_us, flow_nav_speed_t *out)
+static void win_clear(flow_nav_t *s)
+{
+    s->win_n = 0;
+    s->win_vx = s->win_vy = s->win_var = s->win_rel2 = s->win_t = 0.0;
+}
+
+/* The fields both message types share. */
+typedef struct {
+    uint32_t frame_seq, pi_time_us, pi_dt_us;
+    uint16_t n_tracked;
+    uint8_t  exposure_100us, flags;
+} frame_hdr_t;
+
+/* Anchoring, the free-running clock and the gates every message passes,
+ * then the two frames' exposure times. False (counted) if the message
+ * can't be used. */
+static bool frame_times(flow_nav_t *s, const frame_hdr_t *m, uint64_t t_arrival_us, uint64_t *t0_out,
+                        uint64_t *t1_out)
 {
     s->st.msgs++;
 
@@ -175,8 +192,7 @@ bool flow_nav_message(flow_nav_t *s, const flow_msg_flow_t *m, uint64_t t_arriva
         if (s->anchored) s->st.breaks++;
         s->anchored = false;
         /* Frames from before the break don't mix with later ones. */
-        s->win_n = 0;
-        s->win_vx = s->win_vy = s->win_var = s->win_t = 0.0;
+        win_clear(s);
     }
     if ((m->flags & FLOW_F_AFTER_GAP) && s->have_gap && s->gap_t < t_arrival_us) {
         uint32_t ord = flow_nav_ordinal_of(s->gap_period + 1u);
@@ -190,12 +206,15 @@ bool flow_nav_message(flow_nav_t *s, const flow_msg_flow_t *m, uint64_t t_arriva
     const bool free_run = !(m->flags & FLOW_F_TRIGGERED);
     if (free_run) {
         s->st.untriggered++;
-        free_track(s, m, t_arrival_us);
+        free_track(s, m->pi_time_us, t_arrival_us);
     } else if (!s->anchored) {
         s->st.not_anchored++;
         return false;
     }
-    if (!(m->flags & FLOW_F_VALID) || m->n_tracked < s->cfg.min_features) {
+    /* A phase-correlation frame has no feature count (n_tracked is its
+     * response); the Pi has already gated it on the response. */
+    const bool phase = (m->flags & FLOW_F_PHASE) != 0;
+    if (!(m->flags & FLOW_F_VALID) || (!phase && m->n_tracked < s->cfg.min_features)) {
         s->st.invalid++;
         return false;
     }
@@ -237,6 +256,85 @@ bool flow_nav_message(flow_nav_t *s, const flow_msg_flow_t *m, uint64_t t_arriva
         s->st.bad_dt++;
         return false;
     }
+    *t0_out = t0;
+    *t1_out = t1;
+    return true;
+}
+
+/* Camera velocity (camera axes x / y) to body axes at the IMU point:
+ * v_imu = v_cam - w x r. The optical-axis component is not measured; a
+ * ground vehicle has none. False (counted) if faster than max_mps. */
+static bool to_imu_point(flow_nav_t *s, float vcx, float vcy, const float dth_b[3], float dt, float v[3])
+{
+    const float *r = s->r_cb;
+    for (int i = 0; i < 3; i++) v[i] = r[i * 3 + 0] * vcx + r[i * 3 + 1] * vcy;
+    const float w[3] = { dth_b[0] / dt, dth_b[1] / dt, dth_b[2] / dt };
+    const float *la = s->cfg.leverarm_m;
+    v[0] -= w[1] * la[2] - w[2] * la[1];
+    v[1] -= w[2] * la[0] - w[0] * la[2];
+    const float spd = sqrtf(v[0] * v[0] + v[1] * v[1]);
+    if (!(spd <= s->cfg.max_mps)) {
+        s->st.too_fast++;
+        return false;
+    }
+    return true;
+}
+
+/* One frame's velocity into the averaging window: sd is its image-noise
+ * 1-sigma per axis, rel the relative 1-sigma of the height it was scaled
+ * by. True with *out set when the window is complete. */
+static bool accumulate(flow_nav_t *s, uint64_t t1, float dt, const float v[3], float sd, float rel, bool phase,
+                       flow_nav_speed_t *out)
+{
+    /* A window left half full (frames rejected since) is stale: start over. */
+    if (s->win_n != 0 && (float)(t1 - s->win_t0) * 1e-6f > 2.0f * s->cfg.fuse_period_s) win_clear(s);
+    if (s->win_n == 0) s->win_t0 = t1;
+    s->win_n++;
+    s->win_vx += v[0];
+    s->win_vy += v[1];
+    s->win_var += (double)sd * sd;
+    s->win_rel2 += (double)rel * rel;
+    s->win_t += (double)(t1 - s->win_t0);
+    s->st.used++;
+    if (phase) s->st.phase++;
+
+    if ((float)(t1 - s->win_t0) * 1e-6f + dt < s->cfg.fuse_period_s) return false;
+
+    const double n = (double)s->win_n;
+    flow_nav_speed_t o;
+    o.v_b[0] = (float)(s->win_vx / n);
+    o.v_b[1] = (float)(s->win_vy / n);
+    o.speed_mps = sqrtf(o.v_b[0] * o.v_b[0] + o.v_b[1] * o.v_b[1]);
+    o.t_valid_us = s->win_t0 + (uint64_t)(s->win_t / n);
+    /* Frame noise averages down; the height error does not (its mean
+     * relative variance over the window). */
+    const double noise = s->win_var / (n * n);
+    const double r2 = s->win_rel2 / n;
+    float sdo = (float)sqrt(noise + r2 * o.speed_mps * o.speed_mps);
+    o.sd_mps = sdo > s->cfg.min_sd_mps ? sdo : s->cfg.min_sd_mps;
+    /* The same two parts as a 2x2 covariance: the frame noise is the same
+     * on both axes, the height error scales the whole vector (v v^T times
+     * the relative variance). The floor goes on the noise. */
+    const double floor2 = (double)s->cfg.min_sd_mps * s->cfg.min_sd_mps;
+    const double nv = noise > floor2 ? noise : floor2;
+    o.Qll_b[0] = (float)(nv + r2 * o.v_b[0] * o.v_b[0]);
+    o.Qll_b[1] = (float)(r2 * o.v_b[0] * o.v_b[1]);
+    o.Qll_b[2] = (float)(nv + r2 * o.v_b[1] * o.v_b[1]);
+    o.n_frames = (uint16_t)s->win_n;
+    win_clear(s);
+
+    s->last = o;
+    s->have_last = true;
+    s->st.samples++;
+    *out = o;
+    return true;
+}
+
+bool flow_nav_message(flow_nav_t *s, const flow_msg_flow_t *m, uint64_t t_arrival_us, flow_nav_speed_t *out)
+{
+    const frame_hdr_t h = { m->frame_seq, m->pi_time_us, m->pi_dt_us, m->n_tracked, m->exposure_100us, m->flags };
+    uint64_t t0, t1;
+    if (!frame_times(s, &h, t_arrival_us, &t0, &t1)) return false;
     float dth_b[3];
     if (!gyro_integral(s, t0, t1, dth_b)) {
         s->st.no_gyro++;
@@ -253,56 +351,37 @@ bool flow_nav_message(flow_nav_t *s, const flow_msg_flow_t *m, uint64_t t_arriva
     const float vcx = -z * (m->disp_x_rad + dth_c[1]) / dt;
     const float vcy = -z * (m->disp_y_rad - dth_c[0]) / dt;
 
-    /* Camera velocity in body axes (the optical-axis component is not
-     * measured; a ground vehicle has none), then to the IMU point:
-     * v_imu = v_cam - w x r. */
     float v[3];
-    for (int i = 0; i < 3; i++) v[i] = r[i * 3 + 0] * vcx + r[i * 3 + 1] * vcy;
-    const float w[3] = { dth_b[0] / dt, dth_b[1] / dt, dth_b[2] / dt };
-    const float *la = s->cfg.leverarm_m;
-    v[0] -= w[1] * la[2] - w[2] * la[1];
-    v[1] -= w[2] * la[0] - w[0] * la[2];
+    if (!to_imu_point(s, vcx, vcy, dth_b, dt, v)) return false;
+    const float sd = z * m->stddev_rad / dt;
+    return accumulate(s, t1, dt, v, sd, s->cfg.height_rel_sd, (m->flags & FLOW_F_PHASE) != 0, out);
+}
 
-    const float spd = sqrtf(v[0] * v[0] + v[1] * v[1]);
-    if (!(spd <= s->cfg.max_mps)) {
-        s->st.too_fast++;
+bool flow_nav_cam_vel(flow_nav_t *s, const flow_msg_cam_vel_t *m, uint64_t t_arrival_us, flow_nav_speed_t *out)
+{
+    s->st.cam_vel++;
+    const frame_hdr_t h = { m->frame_seq, m->pi_time_us, m->pi_dt_us, m->n_tracked, m->exposure_100us, m->flags };
+    uint64_t t0, t1;
+    if (!frame_times(s, &h, t_arrival_us, &t0, &t1)) return false;
+    if (!(m->height_m > 0.0f) || !isfinite(m->vel_x_mps) || !isfinite(m->vel_y_mps) ||
+        !(m->stddev_mps >= 0.0f) || !(m->height_sd_m >= 0.0f)) {
+        s->st.invalid++;
         return false;
     }
-    const float sd = z * m->stddev_rad / dt;
-
-    /* A window left half full (frames rejected since) is stale: start over. */
-    if (s->win_n != 0 && (float)(t1 - s->win_t0) * 1e-6f > 2.0f * s->cfg.fuse_period_s) {
-        s->win_n = 0;
-        s->win_vx = s->win_vy = s->win_var = s->win_t = 0.0;
+    /* The rotation is out already; the roof gyro is still what moves the
+     * velocity to the IMU point (yaw is shared by cab and chassis). */
+    float dth_b[3];
+    if (!gyro_integral(s, t0, t1, dth_b)) {
+        s->st.no_gyro++;
+        return false;
     }
-    if (s->win_n == 0) s->win_t0 = t1;
-    s->win_n++;
-    s->win_vx += v[0];
-    s->win_vy += v[1];
-    s->win_var += (double)sd * sd;
-    s->win_t += (double)(t1 - s->win_t0);
-    s->st.used++;
+    const float dt = (float)(t1 - t0) * 1e-6f;
+    float v[3];
+    if (!to_imu_point(s, m->vel_x_mps, m->vel_y_mps, dth_b, dt, v)) return false;
 
-    if ((float)(t1 - s->win_t0) * 1e-6f + dt < s->cfg.fuse_period_s) return false;
-
-    const double n = (double)s->win_n;
-    flow_nav_speed_t o;
-    o.v_b[0] = (float)(s->win_vx / n);
-    o.v_b[1] = (float)(s->win_vy / n);
-    o.speed_mps = sqrtf(o.v_b[0] * o.v_b[0] + o.v_b[1] * o.v_b[1]);
-    o.t_valid_us = s->win_t0 + (uint64_t)(s->win_t / n);
-    /* Frame noise averages down; the height error does not. */
-    const double noise = s->win_var / (n * n);
-    const double rel = (double)s->cfg.height_rel_sd * o.speed_mps;
-    float sdo = (float)sqrt(noise + rel * rel);
-    o.sd_mps = sdo > s->cfg.min_sd_mps ? sdo : s->cfg.min_sd_mps;
-    o.n_frames = (uint16_t)s->win_n;
-    s->win_n = 0;
-    s->win_vx = s->win_vy = s->win_var = s->win_t = 0.0;
-
-    s->last = o;
-    s->have_last = true;
-    s->st.samples++;
-    *out = o;
-    return true;
+    s->last_height_m = m->height_m;
+    s->last_height_range = (m->flags & FLOW_F_RANGE) != 0;
+    if (s->last_height_range) s->st.ranged++;
+    const float rel = m->height_sd_m > 0.0f ? m->height_sd_m / m->height_m : s->cfg.height_rel_sd;
+    return accumulate(s, t1, dt, v, m->stddev_mps, rel, (m->flags & FLOW_F_PHASE) != 0, out);
 }

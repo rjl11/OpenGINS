@@ -142,6 +142,9 @@ bool Camera::read(Frame& f, int timeout_ms)
     const ControlList& md = req->metadata();
     f.sensor_ns = md.get(controls::SensorTimestamp).value_or(0);
     f.exposure_us = md.get(controls::ExposureTime).value_or(0);
+    // SensorTimestamp is the first row's exposure start; the middle row
+    // starts later by half the readout, not known here (a few ms at most).
+    f.mid_ns = f.sensor_ns + static_cast<int64_t>(f.exposure_us) * 500;
     requeue(req);
     return true;
 }

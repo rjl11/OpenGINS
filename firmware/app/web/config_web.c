@@ -124,6 +124,13 @@ static const float_field_t k_floats[] = {
     FF("flow_lever_x", flow_leverarm_m[0]),
     FF("flow_lever_y", flow_leverarm_m[1]),
     FF("flow_lever_z", flow_leverarm_m[2]),
+    FF("front_imu_roll_deg", front_imu_rpy_deg[0]),
+    FF("front_imu_pitch_deg", front_imu_rpy_deg[1]),
+    FF("front_imu_yaw_deg", front_imu_rpy_deg[2]),
+    FF("front_imu_lever_x", front_imu_lever_m[0]),
+    FF("front_imu_lever_y", front_imu_lever_m[1]),
+    FF("front_imu_lever_z", front_imu_lever_m[2]),
+    FF("cab_roll_centre_m", cab_roll_centre_m),
     FF("ant_height_m", ant_height_m),
 };
 
@@ -134,6 +141,7 @@ static const float_field_t k_onoff[] = {
     FF("sensor_flow", sensor_flow),
     FF("sensor_wheel", sensor_wheel),
     FF("eth_fitted", eth_fitted),
+    FF("front_imu_backup", front_imu_backup),
 };
 
 /* IPv4 addresses as dotted quads, uint8_t[4] in settings_t. */
@@ -420,6 +428,14 @@ static void settings_obj(jw_t *w, const char *key, const settings_t *s)
     jw_num(w, "flow_lever_x", (double)s->flow_leverarm_m[0], 3);
     jw_num(w, "flow_lever_y", (double)s->flow_leverarm_m[1], 3);
     jw_num(w, "flow_lever_z", (double)s->flow_leverarm_m[2], 3);
+    jw_num(w, "front_imu_roll_deg", (double)s->front_imu_rpy_deg[0], 2);
+    jw_num(w, "front_imu_pitch_deg", (double)s->front_imu_rpy_deg[1], 2);
+    jw_num(w, "front_imu_yaw_deg", (double)s->front_imu_rpy_deg[2], 2);
+    jw_num(w, "front_imu_lever_x", (double)s->front_imu_lever_m[0], 3);
+    jw_num(w, "front_imu_lever_y", (double)s->front_imu_lever_m[1], 3);
+    jw_num(w, "front_imu_lever_z", (double)s->front_imu_lever_m[2], 3);
+    jw_str(w, "front_imu_backup", s->front_imu_backup ? "on" : "off");
+    jw_num(w, "cab_roll_centre_m", (double)s->cab_roll_centre_m, 3);
     jw_str(w, "sensor_baro", s->sensor_baro ? "on" : "off");
     jw_str(w, "sensor_mag", s->sensor_mag ? "on" : "off");
     jw_str(w, "sensor_flow", s->sensor_flow ? "on" : "off");

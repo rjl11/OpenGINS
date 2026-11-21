@@ -48,9 +48,10 @@
  * The camera looks straight down along body z. cam_yaw_rad turns the image
  * about the optical axis: 0 = image top towards body forward. The velocity
  * is moved from the camera to the IMU point with the lever arm, then the
- * horizontal body speed is averaged over fuse_period_s and handed out as a
- * scalar speed sample (INSLIB's speed input has no lever arm and no
- * direction).
+ * horizontal body velocity is averaged over fuse_period_s and handed out
+ * with its 2x2 covariance for INSLIB's body-velocity input (REQ-NAV-096 in
+ * the forked INSLIB), lever arm already applied, plus its magnitude for the
+ * status.
  */
 #ifndef FLOW_NAV_H
 #define FLOW_NAV_H
@@ -95,6 +96,8 @@ typedef struct {
     float    speed_mps;  /* horizontal body speed at the IMU, >= 0          */
     float    sd_mps;
     float    v_b[2];     /* the vector it came from, body x / y [m/s]       */
+    float    Qll_b[3];   /* its covariance xx, xy, yy [(m/s)^2]: frame noise
+                            on both axes plus the height error along v_b    */
     uint16_t n_frames;
 } flow_nav_speed_t;
 
@@ -115,7 +118,10 @@ typedef struct {
     uint32_t resyncs;       /* re-anchor disagreed with the running count    */
     uint32_t breaks;        /* FLOW_F_DROPPED seen                           */
     uint32_t strobe_timed;  /* frames timed by the strobe (others: trigger)  */
+    uint32_t phase;         /* used frames from phase correlation (FLOW_F_PHASE) */
     uint32_t samples;       /* speed samples handed out                      */
+    uint32_t cam_vel;       /* FLOW_MSG_CAM_VEL messages seen (also in msgs)  */
+    uint32_t ranged;        /* used camera velocities with the height from the rangefinder */
 } flow_nav_stats_t;
 
 typedef struct {
@@ -155,8 +161,12 @@ typedef struct {
 
     /* averaging window */
     uint32_t win_n;
-    double   win_vx, win_vy, win_var, win_t;
+    double   win_vx, win_vy, win_var, win_rel2, win_t;
     uint64_t win_t0;
+
+    /* the last FLOW_MSG_CAM_VEL's height and where it came from */
+    float last_height_m;
+    bool  last_height_range;
 
     flow_nav_speed_t last;
     bool             have_last;
@@ -187,6 +197,14 @@ void flow_nav_attitude(flow_nav_t *s, bool valid, float roll_rad, float pitch_ra
 
 /* One message from the Pi. Returns true when a speed sample is complete. */
 bool flow_nav_message(flow_nav_t *s, const flow_msg_flow_t *m, uint64_t t_arrival_us, flow_nav_speed_t *out);
+
+/* One camera velocity from the front camera unit (FLOW_MSG_CAM_VEL),
+ * de-rotated and scaled by height there. Timed, gated and averaged like
+ * flow_nav_message(), into the same window, and moved to the IMU point with
+ * the roof gyro; no de-rotation and no height here. Its height_sd_m sets
+ * the height error (height_rel_sd when 0). Returns true when a speed sample
+ * is complete. */
+bool flow_nav_cam_vel(flow_nav_t *s, const flow_msg_cam_vel_t *m, uint64_t t_arrival_us, flow_nav_speed_t *out);
 
 /* Pulse ordinal <-> trigger period (periods start at 1; multiples of
  * FLOW_LINK_GAP_PERIOD carry no pulse). Exposed for the test. */

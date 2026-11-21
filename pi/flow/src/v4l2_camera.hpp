@@ -35,6 +35,11 @@ public:
     void stop() override;
     bool read(Frame& f, int timeout_ms) override;
     uint64_t n_dropped() const override { return n_dropped_; }
+    bool     request_full() override
+    {
+        want_full_ = true;
+        return true;
+    }
 
     const std::string& video_path() const { return video_; }
     const std::string& subdev_path() const { return subdev_; }
@@ -66,6 +71,7 @@ private:
     bool     have_seq_ = false;
     uint32_t last_seq_ = 0;
     uint64_t n_dropped_ = 0;
+    bool     want_full_ = false;
 };
 
 }  // namespace flow

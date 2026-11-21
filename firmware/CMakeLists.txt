@@ -63,6 +63,7 @@ add_executable(app
     app/field_io.c
     app/speed_ppm.c
     app/flow_nav.c
+    app/front_imu.c
     app/geoid.c
     app/geoid_grid.c
     app/ground_point.c

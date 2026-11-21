@@ -43,3 +43,14 @@ double ground_axis_sd(const double rpy[3], const float sd[3])
     double sy = sin(ground_tilt(rpy)) * sd[2];
     return sqrt((double)sd[0] * sd[0] + (double)sd[1] * sd[1] + sy * sy);
 }
+
+void ground_point_cab(const double llh_ant[3], const double rpy_cab[3], double chassis_roll, double chassis_pitch,
+                      float h_ant, float h_rc, double llh_out[3])
+{
+    const float upper[3] = { 0.0f, 0.0f, h_ant - h_rc };
+    const float lower[3] = { 0.0f, 0.0f, h_rc };
+    const double rpy_ch[3] = { chassis_roll, chassis_pitch, rpy_cab[2] };
+    double rc[3];
+    ground_point(llh_ant, rpy_cab, upper, rc);
+    ground_point(rc, rpy_ch, lower, llh_out);
+}

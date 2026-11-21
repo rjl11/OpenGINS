@@ -93,14 +93,20 @@ static struct {
     uint32_t gaps;
     bool have_last;
     flow_msg_flow_t last;
+    bool have_last_cv;
+    flow_msg_cam_vel_t last_cv; /* front camera unit (FLOW_MSG_CAM_VEL) */
 } s_fl;
 static flow_io_stats_t s_fst;
 static bool s_link_ok;
-/* Frames that came on USB (field_io_usb_flow), for bench tests. */
+/* Frames that came on USB (field_io_usb_flow), for bench tests. While they
+ * come, the unit's settings and heartbeat go back as a "flowcfg <hex>" line
+ * once a second (the flow program's --usb mode reads the Pico's output). */
 static struct {
     uint32_t frames, bad;
     uint64_t t_last;
+    uint32_t cfg_seq;
 } s_fu;
+static flow_msg_unit_cfg_t s_ucfg;
 
 /* Flow to speed (flow_nav.h) and on to core 1. */
 static flow_nav_t s_fn;
@@ -113,22 +119,42 @@ static struct {
 } s_fs;
 static uint32_t s_pushed_win;
 
-/* A good link frame, from the PIO UART or from USB. */
+/* A finished flow sample to core 1, as a body velocity (REQ-NAV-096). */
+static void push_flow(const flow_nav_speed_t *sp)
+{
+    s_pushed_win++;
+    const nav_speed_t ns = {
+        .t_valid_us = sp->t_valid_us, .speed_mps = sp->speed_mps, .sd_mps = sp->sd_mps,
+        .source = NAV_SPEED_FLOW, .has_vel_b = 1,
+        .vel_b = { sp->v_b[0], sp->v_b[1] },
+        .Qll_b = { sp->Qll_b[0], sp->Qll_b[1], sp->Qll_b[2] },
+    };
+    if (!nav_push_speed(&ns)) s_fs.push_drops++;
+}
+
+/* A good link frame, from the PIO UART, USB or UDP. FLOW_MSG_FLOW is the
+ * raw displacement (de-rotated and scaled here), FLOW_MSG_CAM_VEL the front
+ * camera unit's own velocity. */
+static field_io_imu_batch_fn s_imu_batch_fn;
+
+void field_io_set_imu_batch_fn(field_io_imu_batch_fn fn) { s_imu_batch_fn = fn; }
+
 static void flow_frame(const flow_frame_t *f)
 {
+    if (f->type == FLOW_MSG_IMU_BATCH) {
+        if (s_imu_batch_fn != NULL) s_imu_batch_fn(f->payload, f->len, f->t_arrival_us);
+        usb_log_flow_frame(f);
+        return;
+    }
     if (!s_flow_on) return;
     s_fw.frames++;
+    flow_nav_speed_t sp;
     if (f->type == FLOW_MSG_FLOW && flow_link_decode_flow(f->payload, f->len, &s_fl.last) == 0) {
         s_fl.have_last = true;
-        flow_nav_speed_t sp;
-        if (flow_nav_message(&s_fn, &s_fl.last, f->t_arrival_us, &sp)) {
-            s_pushed_win++;
-            const nav_speed_t ns = {
-                .t_valid_us = sp.t_valid_us, .speed_mps = sp.speed_mps, .sd_mps = sp.sd_mps,
-                .source = NAV_SPEED_FLOW,
-            };
-            if (!nav_push_speed(&ns)) s_fs.push_drops++;
-        }
+        if (flow_nav_message(&s_fn, &s_fl.last, f->t_arrival_us, &sp)) push_flow(&sp);
+    } else if (f->type == FLOW_MSG_CAM_VEL && flow_link_decode_cam_vel(f->payload, f->len, &s_fl.last_cv) == 0) {
+        s_fl.have_last_cv = true;
+        if (flow_nav_cam_vel(&s_fn, &s_fl.last_cv, f->t_arrival_us, &sp)) push_flow(&sp);
     }
     usb_log_flow_frame(f);
 }
@@ -181,6 +207,7 @@ void field_io_set_clock(flow_nav_clock_fn fn, void *ctx)
 
 void field_io_apply_settings(const settings_t *s)
 {
+    settings_unit_cfg(s, 0, &s_ucfg);
     const bool flow = s->sensor_flow != 0, wheel = s->sensor_wheel != 0;
     if (flow != s_flow_on) {
         flow_io_set_enabled(flow);
@@ -253,26 +280,28 @@ bool field_io_poll(uint64_t now)
     return worked;
 }
 
-bool field_io_usb_flow(const uint8_t *b, size_t n, uint64_t t_arrival_us)
+bool field_io_link_frame(uint8_t type, const uint8_t *payload, size_t len, uint64_t t_arrival_us)
 {
-    if (n < FLOW_LINK_HEADER_LEN + FLOW_LINK_CRC_LEN || b[0] != FLOW_LINK_SYNC0 || b[1] != FLOW_LINK_SYNC1 ||
-        b[2] != FLOW_LINK_VERSION || b[4] > FLOW_LINK_MAX_PAYLOAD ||
-        n != (size_t)FLOW_LINK_HEADER_LEN + b[4] + FLOW_LINK_CRC_LEN) {
-        s_fu.bad++;
+    if (len > FLOW_LINK_MAX_PAYLOAD) {
         return false;
     }
-    const size_t   len = b[4];
-    const uint16_t crc = (uint16_t)(b[FLOW_LINK_HEADER_LEN + len] | (b[FLOW_LINK_HEADER_LEN + len + 1u] << 8));
-    if (flow_link_crc16(&b[2], 3u + len) != crc) {
-        s_fu.bad++;
-        return false;
-    }
-    flow_frame_t f = { .t_arrival_us = t_arrival_us, .type = b[3], .len = (uint8_t)len };
-    memcpy(f.payload, &b[FLOW_LINK_HEADER_LEN], len);
-    s_fu.frames++;
-    s_fu.t_last = t_arrival_us;
+    flow_frame_t f = { .t_arrival_us = t_arrival_us, .type = type, .len = (uint8_t)len };
+    memcpy(f.payload, payload, len);
     flow_frame(&f);
     return true;
+}
+
+bool field_io_usb_flow(const uint8_t *b, size_t n, uint64_t t_arrival_us)
+{
+    uint8_t type;
+    const int len = flow_link_check(b, n, &type);
+    if (len < 0) {
+        s_fu.bad++;
+        return false;
+    }
+    s_fu.frames++;
+    s_fu.t_last = t_arrival_us;
+    return field_io_link_frame(type, &b[FLOW_LINK_HEADER_LEN], (size_t)len, t_arrival_us);
 }
 
 void field_io_roll(uint64_t now)
@@ -305,6 +334,22 @@ void field_io_roll(uint64_t now)
     s_fs.pushed_hz = (float)s_pushed_win / dt;
     s_pushed_win = 0;
     flow_io_stats(&s_fst);
+
+    if (s_fu.t_last != 0 && now - s_fu.t_last < 3000000u) {
+        uint8_t f[FLOW_LINK_UNIT_CFG_FRAME_LEN];
+        s_ucfg.seq = ++s_fu.cfg_seq;
+        const size_t n = flow_link_encode_unit_cfg(&s_ucfg, f, sizeof f);
+        char line[16 + 2 * FLOW_LINK_UNIT_CFG_FRAME_LEN];
+        static const char k_hex[] = "0123456789abcdef";
+        size_t k = 0;
+        for (const char *c = "flowcfg "; *c; c++) line[k++] = *c;
+        for (size_t i = 0; i < n; i++) {
+            line[k++] = k_hex[f[i] >> 4];
+            line[k++] = k_hex[f[i] & 15];
+        }
+        line[k] = '\0';
+        printf("%s\n", line);
+    }
 }
 
 static void print_speed(void)
@@ -350,6 +395,14 @@ static void print_flow(void)
                (unsigned long)m->frame_seq, (double)m->disp_x_rad, (double)m->disp_y_rad, (double)m->stddev_rad,
                m->n_tracked, (double)m->exposure_100us * 0.1, m->flags);
     }
+    if (s_fl.have_last_cv) {
+        const flow_msg_cam_vel_t *c = &s_fl.last_cv;
+        printf("      last camera velocity %lu  %+.3f %+.3f m/s (sd %.3f)  height %.3f m (sd %.3f, %s)  features %u"
+               "  flags 0x%02x  messages %lu, ranged %lu\n",
+               (unsigned long)c->frame_seq, (double)c->vel_x_mps, (double)c->vel_y_mps, (double)c->stddev_mps,
+               (double)c->height_m, (double)c->height_sd_m, (c->flags & FLOW_F_RANGE) ? "range" : "set",
+               c->n_tracked, c->flags, (unsigned long)s_fn.st.cam_vel, (unsigned long)s_fn.st.ranged);
+    }
     const flow_nav_stats_t *ns = &s_fn.st;
     if (ns->msgs) {
         printf("      speed");
@@ -363,6 +416,7 @@ static void print_flow(void)
         printf("  %.0f Hz to INSLIB  %s  used %lu/%lu  timing strobe %lu", (double)s_fs.pushed_hz,
                s_fn.anchored ? "anchored" : ns->untriggered == ns->msgs ? "free-running" : "NOT anchored",
                (unsigned long)ns->used, (unsigned long)ns->msgs, (unsigned long)ns->strobe_timed);
+        if (ns->phase) printf("  phase corr %lu", (unsigned long)ns->phase);
         if (ns->untriggered) {
             printf("  free-running %lu (Pi clock", (unsigned long)ns->untriggered);
             if (ns->synced) printf(", %lu clock-synced", (unsigned long)ns->synced);
@@ -430,6 +484,14 @@ void field_io_json(jw_t *w)
         jw_int(w, "features", s_fl.last.n_tracked);
         jw_int(w, "flags", s_fl.last.flags);
     }
+    jw_int(w, "cam_vel_msgs", s_fn.st.cam_vel);
+    if (s_fl.have_last_cv) {
+        jw_int(w, "cv_features", s_fl.last_cv.n_tracked);
+        jw_int(w, "cv_flags", s_fl.last_cv.flags);
+        jw_num(w, "unit_height_m", (double)s_fl.last_cv.height_m, 3);
+        jw_bool(w, "unit_height_ranged", (s_fl.last_cv.flags & FLOW_F_RANGE) != 0);
+        jw_int(w, "ranged", s_fn.st.ranged);
+    }
     const flow_nav_stats_t *ns = &s_fn.st;
     jw_num(w, "camera_height_m", (double)s_fn.cfg.height_m, 3);
     jw_num(w, "camera_yaw_deg", (double)s_fn.cfg.cam_yaw_rad * 57.29578, 1);
@@ -447,6 +509,7 @@ void field_io_json(jw_t *w)
     jw_int(w, "msgs", ns->msgs);
     jw_int(w, "used", ns->used);
     jw_int(w, "strobe_timed", ns->strobe_timed);
+    jw_int(w, "phase", ns->phase);
     jw_int(w, "not_anchored", ns->not_anchored);
     jw_int(w, "untriggered", ns->untriggered);
     jw_int(w, "free_resets", ns->free_resets);

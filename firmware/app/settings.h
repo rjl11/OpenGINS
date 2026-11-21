@@ -17,6 +17,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "flow_link.h"
+
 #define SETTINGS_SSID_MAX   32
 #define SETTINGS_PW_MAX     63
 
@@ -29,10 +31,12 @@
  * window), version 5 (172 bytes, up to the antenna height), version 6
  * (176 bytes, up to the height source), version 7 (188 bytes, up to the
  * offset filter), version 8 (192 bytes, up to the GNSS position
- * decimation) and version 9 (196 bytes, up to the offset barometer sigma)
- * are read with the newer fields at their defaults.
+ * decimation), version 9 (196 bytes, up to the offset barometer sigma),
+ * version 10 (212 bytes, up to the correction source) and version 11 (224
+ * bytes, up to the front TM171 mounting) are read with the newer fields at
+ * their defaults.
  * (platform_p1 was added without a bump: see there.) */
-#define SETTINGS_VERSION    10
+#define SETTINGS_VERSION    12
 #define SETTINGS_V1_SIZE    140u
 #define SETTINGS_V2_SIZE    160u
 #define SETTINGS_V3_SIZE    164u
@@ -42,6 +46,8 @@
 #define SETTINGS_V7_SIZE    188u
 #define SETTINGS_V8_SIZE    192u
 #define SETTINGS_V9_SIZE    196u
+#define SETTINGS_V10_SIZE   212u
+#define SETTINGS_V11_SIZE   224u
 
 /* settings_t.height_src: where the INS takes its height from. */
 #define SETTINGS_HEIGHT_AUTO 0 /* by platform: GNSS on a survey pole, else the barometer */
@@ -135,6 +141,28 @@ typedef struct {
      * RTCM_SRC_MODE_*): 0 auto (the first to deliver, until it goes
      * silent), 1 Ethernet only, 2 Bluetooth only. Applied live. */
     uint8_t rtcm_src;
+
+    /* Version 11. The front camera unit's TM171 against the vehicle body
+     * (FRD): roll, pitch, yaw in degrees, TM171 -> body = Rz Ry Rx. Sent
+     * to the unit with the camera height and image direction once a second
+     * (FLOW_MSG_UNIT_CFG, settings_unit_cfg()). Defaults APP_FRONT_IMU_*. */
+    float front_imu_rpy_deg[3];
+
+    /* Version 12. The front unit's TM171 as the backup IMU
+     * (plans/front-camera-unit.md, "Backup IMU for the roof TM210"): its
+     * position from the roof IMU (body FRD, m), so the antenna lever arm for
+     * the filter on the TM171 is leverarm_m minus this; and whether core 0
+     * may switch to it when the TM210 is lost (1 = on). Applied live.
+     * Defaults APP_FRONT_IMU_LEVER_*, APP_FRONT_IMU_BACKUP. */
+    float front_imu_lever_m[3];
+    /* Tractor with a front unit: the cab's roll centre above the ground
+     * [m]. Above 0 (and below the antenna height), the ground point goes
+     * from the antenna to the roll centre along the cab's attitude and on
+     * along the chassis attitude from the TM171 (ground_point_cab()); 0 =
+     * one roll over the whole antenna height. Applied live. Default
+     * APP_CAB_ROLL_CENTRE_M. */
+    float cab_roll_centre_m;
+    uint8_t front_imu_backup;
 } settings_t;
 
 /* The platform (APP_PLATFORM_*) the settings ask for. */
@@ -165,6 +193,10 @@ unsigned settings_loaded_version(void);
 
 /* NULL if every field is in range, else a message naming the field. */
 const char *settings_validate(const settings_t *s);
+
+/* The front camera unit's settings message (common/flow_link.h,
+ * FLOW_MSG_UNIT_CFG) from these settings, with this sequence number. */
+void settings_unit_cfg(const settings_t *s, uint32_t seq, flow_msg_unit_cfg_t *out);
 
 /* Writes a new record into the older sector. Pauses core 1 (flash lockout)
  * and core 0's interrupts for one sector erase, about 50 ms (estimate, not

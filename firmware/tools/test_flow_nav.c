@@ -46,6 +46,11 @@ typedef struct {
     int         triggered;
     int         jitter;      /* arrival jitter on the link                 */
     int         drop_at;     /* ordinal whose message carries FLOW_F_DROPPED, 0 = none */
+    int         phase;       /* 1: FLOW_F_PHASE, n_tracked = response; 2: no features, no flag */
+    int         cam_vel;     /* FLOW_MSG_CAM_VEL instead: 1 height set, 2 from the range */
+    double      unit_height; /* the height the unit reports (0: s->height) */
+    double      height_sd;   /* its 1-sigma, 0 = unknown                   */
+    double      last_qll[3]; /* filled by run(): the last sample's covariance */
     uint32_t    p_first, p_last;
 } scen_t;
 
@@ -145,7 +150,17 @@ typedef struct {
     flow_nav_t fn;
 } result_t;
 
-static void run(const scen_t *s, result_t *res)
+/* What the front camera unit sends: the camera's velocity in camera axes,
+ * rotation removed. Constant body rates make it v_b + w x l in body axes. */
+static void cam_velocity(const scen_t *s, const float r_cb[9], float out[2])
+{
+    const double *w = s->w_b, *l = s->leverarm;
+    const double vb[3] = { s->v_b[0] + w[1] * l[2] - w[2] * l[1], s->v_b[1] + w[2] * l[0] - w[0] * l[2],
+                           s->v_b[2] + w[0] * l[1] - w[1] * l[0] };
+    for (int j = 0; j < 2; j++) out[j] = (float)(r_cb[0 * 3 + j] * vb[0] + r_cb[1 * 3 + j] * vb[1] + r_cb[2 * 3 + j] * vb[2]);
+}
+
+static void run(scen_t *s, result_t *res)
 {
     flow_nav_config_t c = {
         .height_m = (float)s->height, .height_rel_sd = 0.05f, .cam_yaw_rad = (float)s->cam_yaw,
@@ -216,14 +231,36 @@ static void run(const scen_t *s, result_t *res)
             m.disp_x_rad = d[0];
             m.disp_y_rad = d[1];
             m.stddev_rad = 1e-4f;
-            m.n_tracked = 50;
+            m.n_tracked = s->phase ? (s->phase == 1 ? 6u : 0u) : 50u; /* response 0.006, below min_features */
             m.exposure_100us = EXP_US / 100u;
             m.flags = FLOW_F_VALID;
+            if (s->phase == 1) m.flags |= FLOW_F_PHASE;
             if (s->triggered) m.flags |= FLOW_F_TRIGGERED;
             if (pb - pa == 2u) m.flags |= FLOW_F_AFTER_GAP;
             if ((int)ord == s->drop_at) m.flags |= FLOW_F_DROPPED;
             flow_nav_speed_t sp;
-            if (flow_nav_message(fn, &m, arr, &sp)) {
+            bool done;
+            if (s->cam_vel) {
+                flow_msg_cam_vel_t cv = { 0 };
+                cv.frame_seq = m.frame_seq;
+                cv.pi_time_us = m.pi_time_us;
+                cv.pi_dt_us = m.pi_dt_us;
+                float vc[2];
+                cam_velocity(s, fn->r_cb, vc);
+                cv.vel_x_mps = vc[0];
+                cv.vel_y_mps = vc[1];
+                cv.stddev_mps = 0.01f;
+                cv.height_m = (float)(s->unit_height != 0.0 ? s->unit_height : s->height);
+                cv.height_sd_m = (float)s->height_sd;
+                cv.n_tracked = m.n_tracked;
+                cv.exposure_100us = m.exposure_100us;
+                cv.flags = m.flags | (s->cam_vel == 2 ? FLOW_F_RANGE : 0u);
+                done = flow_nav_cam_vel(fn, &cv, arr, &sp);
+            } else {
+                done = flow_nav_message(fn, &m, arr, &sp);
+            }
+            if (done) {
+                for (int q = 0; q < 3; q++) s->last_qll[q] = sp.Qll_b[q];
                 res->n++;
                 res->sum += sp.speed_mps;
                 if (sp.speed_mps < res->min) res->min = sp.speed_mps;
@@ -232,6 +269,16 @@ static void run(const scen_t *s, result_t *res)
                 res->vy = sp.v_b[1];
                 CHECK(sp.t_valid_us < arr && arr - sp.t_valid_us < 150000u);
                 CHECK(sp.n_frames >= 9 && sp.n_frames <= 11);
+                /* Covariance: floored, symmetric positive definite, and the
+                 * height part along v_b: its variance is the speed's. */
+                const double floor2 = (double)fn->cfg.min_sd_mps * fn->cfg.min_sd_mps;
+                CHECK(sp.Qll_b[0] >= floor2 * 0.999 && sp.Qll_b[2] >= floor2 * 0.999);
+                CHECK((double)sp.Qll_b[0] * sp.Qll_b[2] > (double)sp.Qll_b[1] * sp.Qll_b[1]);
+                if (sp.speed_mps > 0.1f) {
+                    const double ux = sp.v_b[0] / sp.speed_mps, uy = sp.v_b[1] / sp.speed_mps;
+                    const double along = ux * ux * sp.Qll_b[0] + 2.0 * ux * uy * sp.Qll_b[1] + uy * uy * sp.Qll_b[2];
+                    CHECK(along >= (double)sp.sd_mps * sp.sd_mps * 0.99);
+                }
             }
         }
     }
@@ -329,6 +376,20 @@ int main(void)
     CHECK_NEAR(r.min, 2.0, 0.01);
     CHECK(r.fn.st.strobe_timed == 0);
 
+    s = base("phase correlation, 2 m/s");
+    s.v_b[0] = 2.0;
+    s.phase = 1;
+    run(&s, &r);
+    CHECK_NEAR(r.min, 2.0, 0.01);
+    CHECK(r.fn.st.phase == r.fn.st.used && r.fn.st.used > 50);
+
+    s = base("too few features, no phase flag");
+    s.v_b[0] = 2.0;
+    s.phase = 2;
+    run(&s, &r);
+    CHECK(r.n == 0);
+    CHECK(r.fn.st.used == 0 && r.fn.st.invalid > 50);
+
     s = base("Pi drops a frame after the gap");
     s.v_b[0] = 2.0;
     s.p_last = 560;
@@ -361,6 +422,46 @@ int main(void)
     run(&s, &r);
     CHECK(r.n >= 10);
     CHECK(r.max < 0.02);
+
+    /* The front camera unit's own velocity (FLOW_MSG_CAM_VEL): free-running
+     * over UDP, rotation removed on the unit; the Pico moves it to the IMU
+     * point, so a turn with the camera ahead still reads the IMU's 2 m/s. */
+    s = base("camera velocity, yaw, cam 1 m ahead");
+    s.v_b[0] = 2.0;
+    s.w_b[2] = 0.5;
+    s.leverarm[0] = 1.0;
+    s.triggered = 0;
+    s.jitter = 1;
+    s.cam_vel = 2;
+    s.height_sd = 0.06; /* 5 % at 1.2 m */
+    s.unit_height = 1.2;
+    run(&s, &r);
+    CHECK(r.n >= 10);
+    CHECK_NEAR(r.vx, 2.0, 0.005);
+    CHECK_NEAR(r.vy, 0.0, 0.005);
+    CHECK(r.fn.st.cam_vel > 100 && r.fn.st.ranged == r.fn.st.used);
+    CHECK(r.fn.last_height_range);
+    CHECK_NEAR(r.fn.last_height_m, 1.2, 1e-6);
+    /* The unit's height error (5 %) sets the scale part along v_b. */
+    CHECK(s.last_qll[0] >= 0.05 * 0.05 * 4.0 * 0.999);
+
+    s = base("camera velocity, sideways, height set");
+    s.v_b[1] = 1.0;
+    s.triggered = 0;
+    s.cam_vel = 1;
+    run(&s, &r);
+    CHECK_NEAR(r.vx, 0.0, 0.005);
+    CHECK_NEAR(r.vy, 1.0, 0.005);
+    CHECK(r.fn.st.ranged == 0 && !r.fn.last_height_range);
+
+    s = base("camera velocity with no height");
+    s.v_b[0] = 2.0;
+    s.triggered = 0;
+    s.cam_vel = 1;
+    s.height = 1.0;
+    s.unit_height = -1.0; /* the unit has no height: not used */
+    run(&s, &r);
+    CHECK(r.n == 0 && r.fn.st.used == 0 && r.fn.st.invalid > 50);
 
     printf(fails ? "test_flow_nav: %d FAILED\n" : "test_flow_nav: OK\n", fails);
     return fails ? EXIT_FAILURE : EXIT_SUCCESS;

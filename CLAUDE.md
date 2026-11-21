@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-GNSS + IMU fusion firmware for a navigation unit meant to be universal: agricultural (AgOpenGPS / AgOpenWeb) on a tractor, a GNSS survey pole, and a UAV. Don't design for the tractor only. `plans/` holds the design. `firmware/` holds a first demo (sensor bring-up and INSLIB fused output, status on USB, no Bluetooth yet). It builds and its parts have been tested on the bench, but not yet end to end in a vehicle. Host tests for the calibration, pole, speed, ground-point, `$PAOGI`, RTCM, AgOpenGPS PGN, clock sync, geoid and flow-link code are in `firmware/tools/test_*.c`; `BUILDING.md` lists the commands.
+GNSS + IMU fusion firmware for a navigation unit meant to be universal: agricultural (AgOpenGPS / AgOpenWeb) on a tractor, a GNSS survey pole, and a UAV. Don't design for the tractor only. `plans/` holds the design. `firmware/` holds a first demo (sensor bring-up and INSLIB fused output, status on USB, no Bluetooth yet). It builds and its parts have been tested on the bench, but not yet end to end in a vehicle. Host tests for the calibration, pole, speed, ground-point, `$PAOGI`, RTCM, AgOpenGPS PGN, clock sync, geoid, flow-link and front-IMU code are in `firmware/tools/test_*.c`; `BUILDING.md` lists the commands.
 
 The target system (see `plans/README.md` for the index):
 - **MCU:** Raspberry Pi Pico 2 W (RP2350 + CYW43439), Pico SDK, bare metal, clocked at 266 MHz instead of the rated 150 MHz (core at 1.20 V, CYW43 PIO divider 3; the defines and their reasons are in `firmware/CMakeLists.txt`). FreeRTOS may come later on core 0 only (`plans/rtos-decision.md`).
@@ -40,7 +40,7 @@ The output is `firmware/build/app.uf2` (and `app.elf` for SWD). The GNSS antenna
 
 ## Pi-side code and shared headers
 
-- `pi/flow/`: optical flow on a Raspberry Pi with the OV9281 camera, sent to the Pico (`pi/flow/README.md`, `plans/optical-flow-aiding.md`). C++17 with CMake; OpenCV and libcamera come from the OS packages (`libopencv-dev`, `libcamera-dev`), never as submodules. Build with `cmake -S pi/flow -B pi/flow/build -G Ninja` and `ninja -C pi/flow/build`, test with `pi/flow/build/test_flow`. `pi/flow/python/` is the first Python version, kept as the reference. Linux code for the Pi goes under `pi/`, one folder per program. Clone on the Pi without `--recursive`; it needs no submodule.
+- `pi/flow/`: optical flow on a Raspberry Pi with the OV9281 camera, sent to the Pico (`pi/flow/README.md`, `plans/optical-flow-aiding.md`). C++17 with CMake; OpenCV and libcamera come from the OS packages (`libopencv-dev`, `libcamera-dev`), never as submodules. Build with `cmake -S pi/flow -B pi/flow/build -G Ninja` and `ninja -C pi/flow/build`, test with `pi/flow/build/test_flow`, `pi/flow/build/test_tfluna` (the TF-Luna rangefinder's reader) and `pi/flow/build/test_tm171` (the TM171 reader and the de-rotation on the front camera unit), all in `pi/flow/`. `pi/flow/python/` is the first Python version, kept as the reference. Linux code for the Pi goes under `pi/`, one folder per program. Clone on the Pi without `--recursive`; it needs no submodule.
 - `common/`: headers shared by the Pico firmware and the Pi code. `common/flow_link.h` is the flow link format (flow from the Pi; over UDP also the Pico's clock sync requests and the unit's replies), used by the C++ program directly; `pi/flow/python/flow_link.py` mirrors it, and `firmware/tools/test_flow_link.c`, `pi/flow/tests/test_flow.cpp` and `pi/flow/python/test_flow_link.py` all check the same example frames, so change both sides in one commit.
 
 ## Submodules
@@ -49,7 +49,7 @@ The output is `firmware/build/app.uf2` (and `app.elf` for SWD). The GNSS antenna
 git submodule update --init --recursive
 ```
 
-- `external/INSLIB`: the navigation filter. It has its own `Makefile`, tests, `coding_style.md` and requirement docs (`requirements/`). Plans cite its headers (`src/nav_suite.h`, `src/ins.h`) as the source of truth.
+- `external/INSLIB`: the navigation filter, from our fork of `jnz/INSLIB` (branch `body-vel`). The fork adds one feature, the body-frame velocity input REQ-NAV-096 for optical flow and wheel odometry, and stays a fork with no pull request upstream; how to rebase it on a new upstream release is in `plans/inslib-nav-suite.md`, "Forked INSLIB". It has its own `Makefile`, tests, `coding_style.md` and requirement docs (`requirements/`). Plans cite its headers (`src/nav_suite.h`, `src/ins.h`) as the source of truth.
 - `external/BMP5_SensorAPI`: Bosch BMP5 driver.
 - `external/Adafruit_BMP5xx`: Adafruit's Arduino library for the BMP580/581/585, kept only as a usage reference for `firmware/drivers/bmp581` (setup order, oversampling/ODR/IIR settings, interrupt config in `src/Adafruit_BMP5xx.cpp` and `examples/`). It is not compiled: its `src/` carries its own copy of Bosch's `bmp5.c`, which would clash with `external/BMP5_SensorAPI`.
 

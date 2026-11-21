@@ -1,6 +1,7 @@
 [submodule "external/INSLIB"]
 	path = external/INSLIB
-	url = https://github.com/jnz/INSLIB.git
+	url = https://github.com/rjl11/INSLIB.git
+	branch = body-vel
 [submodule "external/BMP5_SensorAPI"]
 	path = external/BMP5_SensorAPI
 	url = https://github.com/boschsensortec/BMP5_SensorAPI

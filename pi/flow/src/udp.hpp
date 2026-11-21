@@ -29,6 +29,7 @@ public:
     // moved over by the two clocks' difference read right after), so the
     // wake-up delay of the calling thread is not in it; 0 if the kernel
     // gave none.
+    // After -1, poll() returns at once: the caller waits before trying again.
     long recv(uint8_t* p, size_t cap, int timeout_ms, int64_t* rx_mono_ns = nullptr);
 
 private:

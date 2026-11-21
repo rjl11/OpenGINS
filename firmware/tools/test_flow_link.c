@@ -92,6 +92,62 @@ int main(void)
     CHECK(flow_link_encode_time_resp(&tr, e2, sizeof e2) == rn && memcmp(e2, r, rn) == 0);
     CHECK(flow_link_decode_time_resp(&r[5], FLOW_MSG_TIME_RESP_LEN - 1, &tr) == -1);
 
+    /* Camera velocity: decodes to the values in its comment, rebuilt byte
+     * for byte. */
+    uint8_t c[64];
+    size_t  cn = from_hex(FLOW_LINK_EXAMPLE_CAM_VEL_HEX, c, sizeof c);
+    CHECK(cn == FLOW_LINK_CAM_VEL_FRAME_LEN);
+    CHECK(flow_link_check(c, cn, &type) == (int)FLOW_MSG_CAM_VEL_LEN && type == FLOW_MSG_CAM_VEL);
+    flow_msg_cam_vel_t cv = {0};
+    CHECK(flow_link_decode_cam_vel(&c[5], FLOW_MSG_CAM_VEL_LEN, &cv) == 0);
+    CHECK(cv.frame_seq == 2000u && cv.pi_time_us == 987654321u && cv.pi_dt_us == 10000u);
+    CHECK(cv.vel_x_mps == 1.5f && cv.vel_y_mps == -0.25f && cv.stddev_mps == 0.02f);
+    CHECK(cv.height_m == 1.2f && cv.height_sd_m == 0.03f);
+    CHECK(cv.n_tracked == 64u && cv.exposure_100us == 8u && cv.flags == (FLOW_F_VALID | FLOW_F_RANGE));
+    uint8_t e3[64];
+    CHECK(flow_link_encode_cam_vel(&cv, e3, sizeof e3) == cn && memcmp(e3, c, cn) == 0);
+    CHECK(flow_link_decode_cam_vel(&c[5], FLOW_MSG_CAM_VEL_LEN - 1, &cv) == -1);
+
+    /* Unit settings (Pico -> unit). */
+    uint8_t u[64];
+    size_t  un = from_hex(FLOW_LINK_EXAMPLE_UNIT_CFG_HEX, u, sizeof u);
+    CHECK(un == FLOW_LINK_UNIT_CFG_FRAME_LEN);
+    CHECK(flow_link_check(u, un, &type) == (int)FLOW_MSG_UNIT_CFG_LEN && type == FLOW_MSG_UNIT_CFG);
+    flow_msg_unit_cfg_t uc = {0};
+    CHECK(flow_link_decode_unit_cfg(&u[5], FLOW_MSG_UNIT_CFG_LEN, &uc) == 0);
+    CHECK(uc.seq == 3u && uc.height_m == 1.25f && uc.cam_yaw_rad == 0.5f);
+    CHECK(uc.imu_rpy_rad[0] == 0.0f && uc.imu_rpy_rad[1] == -0.25f && uc.imu_rpy_rad[2] == 1.5f);
+    CHECK(uc.flags == FLOW_CFG_F_FLOW_ON);
+    uint8_t e4[64];
+    CHECK(flow_link_encode_unit_cfg(&uc, e4, sizeof e4) == un && memcmp(e4, u, un) == 0);
+    CHECK(flow_link_decode_unit_cfg(&u[5], FLOW_MSG_UNIT_CFG_LEN + 1, &uc) == -1);
+
+    /* IMU batch: decodes to the values in its comment, rebuilt byte for
+     * byte; out of range is clamped and flagged; a bad length refused. */
+    uint8_t ib[160];
+    size_t  ibn = from_hex(FLOW_LINK_EXAMPLE_IMU_BATCH_HEX, ib, sizeof ib);
+    CHECK(ibn == FLOW_LINK_HEADER_LEN + 8u + 2u * 14u + FLOW_LINK_CRC_LEN);
+    CHECK(flow_link_check(ib, ibn, &type) == 36 && type == FLOW_MSG_IMU_BATCH);
+    flow_msg_imu_batch_t bt;
+    memset(&bt, 0, sizeof bt);
+    CHECK(flow_link_decode_imu_batch(&ib[5], 36, &bt) == 0);
+    CHECK(bt.t0_us == 1000000u && bt.seq == 9u && bt.n == 2u && bt.flags == 0u);
+    CHECK(bt.s[0].dt_us == 0u && bt.s[0].gyr[0] == 0.5f && bt.s[0].gyr[1] == -0.25f && bt.s[0].acc[2] == -9.8125f);
+    CHECK(bt.s[1].dt_us == 1250u && bt.s[1].gyr[2] == 1.0f && bt.s[1].acc[0] == 1.0f && bt.s[1].acc[1] == -1.0f);
+    uint8_t e5[160];
+    CHECK(flow_link_encode_imu_batch(&bt, e5, sizeof e5) == ibn && memcmp(e5, ib, ibn) == 0);
+    CHECK(flow_link_decode_imu_batch(&ib[5], 35, &bt) == -1);
+    flow_msg_imu_batch_t big;
+    memset(&big, 0, sizeof big);
+    big.n = 1;
+    big.s[0].gyr[0] = 9.0f;
+    CHECK(flow_link_encode_imu_batch(&big, e5, sizeof e5) != 0);
+    CHECK(flow_link_decode_imu_batch(&e5[5], 22, &bt) == 0 && (bt.flags & FLOW_IMU_F_CLAMPED) && bt.s[0].gyr[0] < 8.0f);
+    big.n = FLOW_IMU_BATCH_MAX;
+    CHECK(flow_link_encode_imu_batch(&big, e5, sizeof e5) == FLOW_LINK_HEADER_LEN + 120u + FLOW_LINK_CRC_LEN);
+    big.n = FLOW_IMU_BATCH_MAX + 1u;
+    CHECK(flow_link_encode_imu_batch(&big, e5, sizeof e5) == 0);
+
     printf(fails ? "test_flow_link: %d FAILED\n" : "test_flow_link: OK\n", fails);
     return fails ? EXIT_FAILURE : EXIT_SUCCESS;
 }

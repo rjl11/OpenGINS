@@ -439,8 +439,9 @@
 #define APP_RTCM_SRC_HOLD_S         5u
 #define APP_ETH_SPI_HZ              30000000u
 
-/* Flow into INSLIB (app/flow_nav.h): the Pi's flow becomes a ground speed on
- * core 0 and goes to INSLIB's speed input while the flow sensor is on. The
+/* Flow into INSLIB (app/flow_nav.h): the Pi's flow becomes a horizontal body
+ * velocity at the IMU point on core 0 and goes to INSLIB's body-velocity
+ * input (REQ-NAV-096, forked INSLIB) while the flow sensor is on. The
  * height, image yaw and lever arm below are the defaults of the web page's
  * settings; the rest is compile-time.
  *  HEIGHT_M        lens above level ground [m]
@@ -478,6 +479,35 @@
 #define APP_FLOW_MAX_TILT_DEG       30.0f
 #define APP_FLOW_MIN_FEATURES       15u
 #define APP_FLOW_FREE_LATENCY_US    8000u
+/* The front camera unit's TM171 against the vehicle body (roll, pitch, yaw
+ * in degrees, TM171 -> body = Rz Ry Rx): the defaults of the web page's
+ * setting, sent to the unit with the camera height and image direction
+ * (FLOW_MSG_UNIT_CFG). 0: mounted level, x forward. */
+#define APP_FRONT_IMU_ROLL_DEG      0.0f
+#define APP_FRONT_IMU_PITCH_DEG     0.0f
+#define APP_FRONT_IMU_YAW_DEG       0.0f
+/* The TM171 as the backup IMU (app/front_imu.h, main.c): its position from
+ * the roof IMU, body FRD [m] (the filter on the TM171 uses the antenna lever
+ * arm minus this), and whether core 0 may switch to it. The switch waits
+ * BACKUP_AFTER for a lost TM210 and switches back once the TM210 has run for
+ * BACKUP_BACK. A batch arriving later than FRESH counts as no TM171. Times
+ * are estimates for a first test. */
+#define APP_FRONT_IMU_LEVER_X_M     0.0f
+#define APP_FRONT_IMU_LEVER_Y_M     0.0f
+#define APP_FRONT_IMU_LEVER_Z_M     0.0f
+#define APP_FRONT_IMU_BACKUP        1
+#define APP_FRONT_IMU_BACKUP_AFTER_MS 1000u
+#define APP_FRONT_IMU_BACKUP_BACK_MS  5000u
+#define APP_FRONT_IMU_FRESH_MS      100u
+/* Without the clock sync (USB bench path): sample to arrival, the least
+ * [us] (estimate: the unit's USB read and the Pico's poll). */
+#define APP_FRONT_IMU_FREE_LATENCY_US 2000u
+/* The chassis tilt from the TM171 (front_imu.h): complementary filter time
+ * constant [s] and accelerometer gate (fraction of 1 g). Estimates. */
+#define APP_FRONT_TILT_TAU_S        1.0f
+#define APP_FRONT_TILT_ACC_GATE     0.05f
+/* Cab roll centre above the ground [m]: 0 = off (ground_point_cab()). */
+#define APP_CAB_ROLL_CENTRE_M       0.0f
 #define APP_FLOW_SYNC_TS_TO_MID_US  0
 
 /* Wheel / ground-speed pulses (plans/wheel-odometry-aiding.md). The internal

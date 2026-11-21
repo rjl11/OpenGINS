@@ -120,6 +120,9 @@ static int sock_cmd(w5500_t *w, unsigned s, uint8_t cmd)
 {
     wr8(w, BSB_SREG(s), SN_CR, cmd);
     uint64_t t0 = time_us_64();
+    if (cmd == CR_SEND) {
+        w->send_us[s] = t0;
+    }
     while (rd8(w, BSB_SREG(s), SN_CR) != 0) {
         if (time_us_64() - t0 > CMD_TIMEOUT_US) {
             return W5500_E_TIMEOUT;
@@ -183,6 +186,7 @@ void w5500_hold_reset(w5500_t *w)
     w->present = false;
     memset(w->open, 0, sizeof w->open);
     memset(w->send_pending, 0, sizeof w->send_pending);
+    memset(w->dst_set, 0, sizeof w->dst_set);
 }
 
 int w5500_set_net(w5500_t *w, const uint8_t mac[6], const uint8_t ip[4], const uint8_t mask[4],
@@ -196,6 +200,11 @@ int w5500_set_net(w5500_t *w, const uint8_t mac[6], const uint8_t ip[4], const u
     wr(w, BSB_COMMON, SUBR, mask, 4);
     wr(w, BSB_COMMON, GAR, gw, 4);
     return W5500_OK;
+}
+
+bool w5500_alive(w5500_t *w)
+{
+    return w->present && rd8(w, BSB_COMMON, VERSIONR) == CHIP_VERSION;
 }
 
 bool w5500_phy(w5500_t *w, w5500_phy_t *out)
@@ -239,6 +248,7 @@ void w5500_close(w5500_t *w, unsigned s)
     wr8(w, BSB_SREG(s), SN_IR, 0xFF);
     w->open[s] = false;
     w->send_pending[s] = false;
+    w->dst_set[s] = false;
 }
 
 int w5500_udp_send(w5500_t *w, unsigned s, const uint8_t ip[4], uint16_t port, const void *data,
@@ -264,8 +274,15 @@ int w5500_udp_send(w5500_t *w, unsigned s, const uint8_t ip[4], uint16_t port, c
     if (len > rd16_stable(w, BSB_SREG(s), SN_TX_FSR)) {
         return W5500_E_TOO_BIG;
     }
-    wr(w, BSB_SREG(s), SN_DIPR, ip, 4);
-    wr16(w, BSB_SREG(s), SN_DPORT, port);
+    if (!w->dst_set[s] || memcmp(w->dst_ip[s], ip, 4) != 0) {
+        wr(w, BSB_SREG(s), SN_DIPR, ip, 4);
+        memcpy(w->dst_ip[s], ip, 4);
+    }
+    if (!w->dst_set[s] || w->dst_port[s] != port) {
+        wr16(w, BSB_SREG(s), SN_DPORT, port);
+        w->dst_port[s] = port;
+    }
+    w->dst_set[s] = true;
     uint16_t ptr = rd16(w, BSB_SREG(s), SN_TX_WR);
     wr(w, BSB_STX(s), ptr, data, len); /* the offset wraps in the chip */
     wr16(w, BSB_SREG(s), SN_TX_WR, (uint16_t)(ptr + len));

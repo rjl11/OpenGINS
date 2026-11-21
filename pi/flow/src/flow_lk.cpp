@@ -83,6 +83,7 @@ bool FlowEstimator::update(const cv::Mat& cur, FlowResult& r)
     std::vector<cv::Point2f> keep;
     r = track(prev, cur, pts_, &keep);
     pts_.swap(keep);
+    if (!r.valid && p_.phase_fallback) r = phase(prev, cur);
     return true;
 }
 
@@ -90,7 +91,57 @@ FlowResult FlowEstimator::estimate(const cv::Mat& prev, const cv::Mat& cur)
 {
     std::vector<cv::Point2f> p0;
     detect(prev, p0);
-    return track(prev, cur, p0, nullptr);
+    FlowResult r = track(prev, cur, p0, nullptr);
+    if (!r.valid && p_.phase_fallback) r = phase(prev, cur);
+    return r;
+}
+
+FlowResult FlowEstimator::phase(const cv::Mat& prev, const cv::Mat& cur)
+{
+    FlowResult r;
+    r.phase = true;
+    n_phase_++;
+    if (roi_.width == 0 || roi_.x + roi_.width > cur.cols || roi_.y + roi_.height > cur.rows) {
+        // Square of phase_roi_rad around the principal point (pinhole is
+        // close enough in the centre), inside the border, even size.
+        const int lim = std::min(cur.cols, cur.rows) - 2 * p_.border_px;
+        int       n = static_cast<int>(2.0 * intr_.fx * std::tan(0.5 * p_.phase_roi_rad));
+        n = std::max(16, std::min(n, lim)) & ~1;
+        int x = static_cast<int>(std::lround(intr_.cx)) - n / 2;
+        int y = static_cast<int>(std::lround(intr_.cy)) - n / 2;
+        x = std::max(0, std::min(x, cur.cols - n));
+        y = std::max(0, std::min(y, cur.rows - n));
+        roi_ = cv::Rect(x, y, n, n);
+        cv::createHanningWindow(hann_, roi_.size(), CV_32F);
+    }
+    // Mean removed before the window: otherwise the window's own shape
+    // correlates with itself and pulls weak texture towards zero shift.
+    cv::Scalar ma, sa, mb, sb;
+    cv::meanStdDev(prev(roi_), ma, sa);
+    cv::meanStdDev(cur(roi_), mb, sb);
+    if (std::min(sa[0], sb[0]) < p_.phase_min_contrast) return r;
+    prev(roi_).convertTo(fa_, CV_32F, 1.0, -ma[0]);
+    cur(roi_).convertTo(fb_, CV_32F, 1.0, -mb[0]);
+    double            resp = 0;
+    const cv::Point2d s = cv::phaseCorrelate(fa_, fb_, hann_, &resp);
+    r.response = resp;
+    // A shift past a quarter of the square is ambiguous (the correlation wraps).
+    if (!(resp >= p_.phase_min_response) || std::fabs(s.x) > roi_.width / 4.0 ||
+        std::fabs(s.y) > roi_.height / 4.0)
+        return r;
+
+    // Undistort the centre and its shifted copy, around the calibrated
+    // principal point.
+    const cv::Point2f              c(static_cast<float>(roi_.x + 0.5 * (roi_.width - 1)),
+                                     static_cast<float>(roi_.y + 0.5 * (roi_.height - 1)));
+    const std::vector<cv::Point2f> px = {c, c + cv::Point2f(static_cast<float>(s.x), static_cast<float>(s.y))};
+    std::vector<cv::Point2d>       nm;
+    intr_.to_normalised(px, nm);
+    r.disp_x = nm[1].x - nm[0].x;
+    r.disp_y = nm[1].y - nm[0].y;
+    r.stddev = p_.phase_sd_px / resp / std::min(intr_.fx, intr_.fy);
+    r.valid = true;
+    return r;
 }
 
 static double median_inplace(std::vector<double>& v)

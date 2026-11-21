@@ -28,7 +28,9 @@ _Static_assert(offsetof(settings_t, offset_interval_s) == SETTINGS_V6_SIZE, "ver
 _Static_assert(offsetof(settings_t, gnss_pos_decim) == SETTINGS_V7_SIZE, "version 7 must be a prefix");
 _Static_assert(offsetof(settings_t, offset_baro_sd_m) == SETTINGS_V8_SIZE, "version 8 must be a prefix");
 _Static_assert(offsetof(settings_t, eth_fitted) == SETTINGS_V9_SIZE, "version 9 must be a prefix");
-_Static_assert(sizeof(settings_t) == 212,"settings_t size changed: bump SETTINGS_VERSION");
+_Static_assert(offsetof(settings_t, front_imu_rpy_deg) == SETTINGS_V10_SIZE, "version 10 must be a prefix");
+_Static_assert(offsetof(settings_t, front_imu_lever_m) == SETTINGS_V11_SIZE, "version 11 must be a prefix");
+_Static_assert(sizeof(settings_t) == 244,"settings_t size changed: bump SETTINGS_VERSION");
 
 static flash_rec_t s_rec;
 static unsigned s_loaded_version; /* of the record settings_load() read, 0 = none */
@@ -83,6 +85,14 @@ void settings_defaults(settings_t *s)
     memcpy(s->eth_mask, k_mask, 4);
     memcpy(s->eth_gw, k_gw, 4);
     s->rtcm_src = RTCM_SRC_MODE_AUTO;
+    s->front_imu_rpy_deg[0] = APP_FRONT_IMU_ROLL_DEG;
+    s->front_imu_rpy_deg[1] = APP_FRONT_IMU_PITCH_DEG;
+    s->front_imu_rpy_deg[2] = APP_FRONT_IMU_YAW_DEG;
+    s->front_imu_lever_m[0] = APP_FRONT_IMU_LEVER_X_M;
+    s->front_imu_lever_m[1] = APP_FRONT_IMU_LEVER_Y_M;
+    s->front_imu_lever_m[2] = APP_FRONT_IMU_LEVER_Z_M;
+    s->front_imu_backup = APP_FRONT_IMU_BACKUP;
+    s->cab_roll_centre_m = APP_CAB_ROLL_CENTRE_M;
 }
 
 bool settings_ins_gnss_height(const settings_t *s, unsigned platform)
@@ -134,6 +144,8 @@ bool settings_load(settings_t *s)
         /* An older record: its fields over the defaults of the newer ones.
          * The next save writes the current version. Newest first. */
         static const struct { uint16_t version, size; } k_old[] = {
+            { 11, SETTINGS_V11_SIZE },
+            { 10, SETTINGS_V10_SIZE },
             { 9, SETTINGS_V9_SIZE },
             { 8, SETTINGS_V8_SIZE },
             { 7, SETTINGS_V7_SIZE },
@@ -266,6 +278,20 @@ const char *settings_validate(const settings_t *s)
     if (rtcm_src_mode_name(s->rtcm_src) == NULL) {
         return "correction source: auto, ethernet or bluetooth";
     }
+    for (int i = 0; i < 3; i++) {
+        if (!in_range(s->front_imu_rpy_deg[i], -180.0f, 360.0f)) {
+            return "front unit TM171 mounting: each angle must be within -180 .. 360 deg";
+        }
+        if (!in_range(s->front_imu_lever_m[i], -20.0f, 20.0f)) {
+            return "front unit TM171 position: each axis must be within -20 .. 20 m";
+        }
+    }
+    if (s->front_imu_backup > 1) {
+        return "front unit TM171 backup: on or off";
+    }
+    if (!in_range(s->cab_roll_centre_m, 0.0f, 10.0f)) {
+        return "cab roll centre: must be within 0 .. 10 m (0 = off)";
+    }
     const char *eth = eth_validate(s);
     if (eth != NULL) {
         return eth;
@@ -306,4 +332,15 @@ bool settings_reboot_fields_differ(const settings_t *a, const settings_t *b)
     return a->antenna_dual != b->antenna_dual || a->wifi_mode != b->wifi_mode ||
            settings_platform(a) != settings_platform(b) ||
            strcmp(a->sta_ssid, b->sta_ssid) != 0 || strcmp(a->sta_password, b->sta_password) != 0;
+}
+
+void settings_unit_cfg(const settings_t *s, uint32_t seq, flow_msg_unit_cfg_t *out)
+{
+    const float k = 0.017453293f;
+    memset(out, 0, sizeof *out);
+    out->seq = seq;
+    out->height_m = s->flow_height_m;
+    out->cam_yaw_rad = s->flow_cam_yaw_deg * k;
+    for (int i = 0; i < 3; i++) out->imu_rpy_rad[i] = s->front_imu_rpy_deg[i] * k;
+    out->flags = s->sensor_flow ? FLOW_CFG_F_FLOW_ON : 0u;
 }

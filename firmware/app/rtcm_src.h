@@ -24,7 +24,7 @@ enum { RTCM_SRC_ETH = 0, RTCM_SRC_BT, RTCM_SRC_N };
 #define RTCM_SRC_MODE_BT   2
 
 typedef struct {
-    uint32_t frames;   /* accepted                 */
+    uint32_t frames;   /* selected and passed on (COM1 may still refuse: um980 rtcm_dropped) */
     uint32_t dropped;  /* refused: not the source  */
     uint64_t t_last;   /* last frame offered, 0 = never */
 } rtcm_src_stat_t;

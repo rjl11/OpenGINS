@@ -17,6 +17,15 @@
  * (metres), so the move uses the local radii of curvature. */
 void ground_point(const double llh_in[3], const double *rpy, const float off_b[3], double llh_out[3]);
 
+/* Tractor with a cab on its suspension (plans/front-camera-unit.md, "Cab-
+ * suspension roll for the ground point"): from the antenna down to the cab's
+ * roll centre along the cab's attitude (rpy_cab, the roof INS), then down to
+ * the ground along the chassis attitude (chassis roll and pitch, the front
+ * unit's TM171, with the cab's yaw). h_ant: antenna above the ground; h_rc:
+ * the roll centre above the ground (0 < h_rc < h_ant). */
+void ground_point_cab(const double llh_ant[3], const double rpy_cab[3], double chassis_roll, double chassis_pitch,
+                      float h_ant, float h_rc, double llh_out[3]);
+
 /* Tilt of the body down axis from the vertical [rad]. */
 double ground_tilt(const double rpy[3]);
 

@@ -17,6 +17,7 @@ plans to work. The bench records are not published.
 - `docs/datasheets/Mosaic-X5_Datasheet.pdf`
 - `docs/datasheets/RP-008304-DS-3-pico-2-w-datasheet.pdf`
 - `docs/datasheets/RP-008373-DS-3-rp2350-datasheet.pdf`
+- `docs/datasheets/SJ-PM-TF-Luna_A05_Product_Manual.pdf`
 - `docs/datasheets/TransducerM_TM151_TM171_Datasheet_EN_V116-R.pdf`
 - `docs/datasheets/TransducerM_TM210_Datasheet_EN_V126-R.pdf`
 - `docs/datasheets/UM980_Datasheet.pdf`

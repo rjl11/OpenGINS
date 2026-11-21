@@ -59,15 +59,20 @@ typedef struct {
     float    pressure_pa;
 } nav_baro_t;
 
-/* Ground speed for INSLIB's scalar speed input (REQ-NAV-068): horizontal
- * speed at the IMU point, unsigned. From optical flow (flow_nav.h) now,
- * wheel speed later; both share this queue. */
+/* Ground speed at the IMU point. From optical flow (flow_nav.h) now, wheel
+ * speed later; both share this queue. With has_vel_b the horizontal body
+ * velocity goes to INSLIB's body-velocity input (REQ-NAV-096, forked INSLIB;
+ * lever arm already applied, z not measured), else the unsigned speed to its
+ * scalar speed input (REQ-NAV-068). */
 enum { NAV_SPEED_FLOW = 0, NAV_SPEED_WHEEL = 1, NAV_SPEED_SOURCES };
 typedef struct {
     uint64_t t_valid_us;   /* time of validity, Pico clock                  */
     float    speed_mps;
     float    sd_mps;       /* 1-sigma                                       */
     uint8_t  source;       /* NAV_SPEED_*                                   */
+    uint8_t  has_vel_b;    /* vel_b / Qll_b set                             */
+    float    vel_b[2];     /* body x / y at the IMU [m/s]                   */
+    float    Qll_b[3];     /* covariance xx, xy, yy [(m/s)^2]               */
 } nav_speed_t;
 
 /* Which INSLIB filter the attitude comes from, in nav_suite_get_rpy()'s
@@ -125,7 +130,7 @@ typedef struct {
     uint32_t n_baro_late;  /* barometer samples dropped: too old            */
     uint32_t n_speed[NAV_SPEED_SOURCES]; /* speed samples given to the filter, per source */
     uint32_t n_speed_late; /* speed samples dropped: older than INSLIB's limit */
-    uint32_t n_speed_used; /* INSLIB fused them (ins_diag_t)                */
+    uint32_t n_speed_used; /* INSLIB fused them (ins_diag_t, speed and body velocity) */
     uint32_t n_speed_skipped; /* INSLIB skipped them: too slow, or no history */
     uint32_t update_us_max;  /* longest nav_suite_update() since the last report */
     uint32_t update_us_mean; /* mean over the same interval                 */

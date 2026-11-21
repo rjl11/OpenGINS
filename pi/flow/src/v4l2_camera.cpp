@@ -257,8 +257,18 @@ bool V4l2Camera::read(Frame& f, int timeout_ms)
         // A new Mat every frame: the flow estimator still holds the previous one.
         if (raw.cols == p_.width && raw.rows == p_.height) f.grey = raw.clone();
         else cv::resize(raw, f.grey, cv::Size(p_.width, p_.height), 0, 0, cv::INTER_AREA);
+        if (want_full_) {
+            f.full = raw.clone();
+            want_full_ = false;
+        } else {
+            f.full.release();
+        }
         f.sensor_ns = t_ns;
         f.exposure_us = static_cast<int>(std::lround(exp_lines_ * line_s_ * 1e6));
+        // Frame end is the last row's readout: the middle row's exposure
+        // ends half the readout (h_ rows) earlier, its middle half the
+        // exposure before that.
+        f.mid_ns = t_ns - static_cast<int64_t>((0.5 * h_ * line_s_ + 0.5 * exp_lines_ * line_s_) * 1e9);
     }
     if (xioctl(vfd_, VIDIOC_QBUF, &b) < 0) fail("qbuf");
     if (bad) return false;

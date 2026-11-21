@@ -59,6 +59,17 @@ typedef struct {
     bool     open[W5500_SOCKETS];
     bool     send_pending[W5500_SOCKETS];
     uint32_t send_timeouts[W5500_SOCKETS];
+    /* time_us_64() right after the last SEND command was written to Sn_CR,
+     * before waiting for the chip to take it: the closest the app gets to
+     * when the datagram leaves (the clock sync times its requests by it). */
+    uint64_t send_us[W5500_SOCKETS];
+    /* Destination last written to Sn_DIPR / Sn_DPORT. Rewritten only when
+     * it changes: the chip resolves a unicast address by ARP after DIPR
+     * changes, so a fixed destination is not looked up on every send
+     * (not yet checked on a W5500). */
+    uint8_t  dst_ip[W5500_SOCKETS][4];
+    uint16_t dst_port[W5500_SOCKETS];
+    bool     dst_set[W5500_SOCKETS];
 } w5500_t;
 
 typedef struct {
@@ -78,6 +89,11 @@ void w5500_hold_reset(w5500_t *w);
 int w5500_set_net(w5500_t *w, const uint8_t mac[6], const uint8_t ip[4], const uint8_t mask[4],
                   const uint8_t gw[4]);
 
+/* True while the chip still answers (VERSIONR reads 0x04). False after a
+ * power glitch, a loose cable to the module or w5500_hold_reset(): the
+ * caller starts over with w5500_init(). */
+bool w5500_alive(w5500_t *w);
+
 /* PHYCFGR: link, speed and duplex. */
 bool w5500_phy(w5500_t *w, w5500_phy_t *out);
 
@@ -87,7 +103,9 @@ void w5500_close(w5500_t *w, unsigned sock);
 
 /* Queues one datagram (at most the socket's TX buffer) and issues SEND.
  * Returns W5500_OK, or W5500_E_BUSY while the previous send has not ended
- * (nothing is sent), or another error. */
+ * (nothing is sent), or another error. W5500_E_SEND_FAIL reports that the
+ * previous send timed out; this one was still sent. send_us[sock] is the
+ * time of the SEND command. */
 int w5500_udp_send(w5500_t *w, unsigned sock, const uint8_t ip[4], uint16_t port, const void *data,
                    size_t len);
 

@@ -23,10 +23,6 @@
 extern "C" {
 #endif
 
-/* Power of two. 2048: whole RTCM frames (up to 1029 bytes) for the GNSS
- * receiver, with room for the next one. */
-#define UART_DMA_TX_SIZE 2048u
-
 typedef struct {
     uart_inst_t *uart;
     int          dma_ch;
@@ -39,7 +35,8 @@ typedef struct {
     uint32_t     rx_count;    /* DMA byte counter at the last snapshot      */
     uint32_t     rx_overflows; /* times the ring was lapped; data discarded */
 
-    uint8_t      tx_buf[UART_DMA_TX_SIZE];
+    uint8_t     *tx_buf;      /* the caller's, a power of two in size       */
+    uint32_t     tx_mask;     /* size - 1                                   */
     uint32_t     tx_head;
     uint32_t     tx_tail;
     uint32_t     tx_dropped;  /* bytes refused because the ring was full    */
@@ -47,9 +44,13 @@ typedef struct {
 
 /* rx_buf must be 2^rx_size_bits bytes and aligned to that size, for example
  *   static uint8_t buf[4096] __attribute__((aligned(4096)));  -> rx_size_bits 12
- * Returns false if no DMA channel is free. */
+ * tx_buf is the transmit ring, 2^tx_size_bits bytes (no alignment needed);
+ * a write must fit in it whole, less one byte. Sized per port: the GNSS
+ * port takes whole RTCM frames (up to 1029 bytes), the IMU port only short
+ * commands. Returns false if no DMA channel is free. */
 bool uart_dma_init(uart_dma_t *u, uart_inst_t *uart, unsigned tx_pin, unsigned rx_pin,
-                   unsigned baud, uint8_t *rx_buf, unsigned rx_size_bits);
+                   unsigned baud, uint8_t *rx_buf, unsigned rx_size_bits, uint8_t *tx_buf,
+                   unsigned tx_size_bits);
 
 /* Changes the baud rate and discards everything received so far. Call it only
  * when uart_dma_tx_idle() is true, or the bytes still in the shifter are cut. */

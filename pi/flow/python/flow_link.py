@@ -2,8 +2,10 @@
 
 Mirrors common/flow_link.h byte for byte (the C++ program in pi/flow uses
 the header itself); change both together.
-test_flow_link.py checks the example frames (FLOW_LINK_EXAMPLE_HEX and the
-two FLOW_LINK_EXAMPLE_TIME_*_HEX in the header).
+test_flow_link.py checks the example frames (FLOW_LINK_EXAMPLE_HEX, the
+two FLOW_LINK_EXAMPLE_TIME_*_HEX, FLOW_LINK_EXAMPLE_CAM_VEL_HEX,
+FLOW_LINK_EXAMPLE_UNIT_CFG_HEX and FLOW_LINK_EXAMPLE_IMU_BATCH_HEX in the
+header).
 """
 
 import re
@@ -20,15 +22,81 @@ GAP_PERIOD = 256
 MSG_FLOW = 1
 MSG_TIME_REQ = 2  # clock sync request, Pico -> unit (UDP only)
 MSG_TIME_RESP = 3  # clock sync reply, unit -> Pico (UDP only)
+MSG_CAM_VEL = 4  # camera velocity, de-rotated on the unit, unit -> Pico
+MSG_UNIT_CFG = 5  # the unit's settings and the heartbeat, Pico -> unit
+MSG_IMU_BATCH = 6  # TM171 samples, the backup IMU, unit -> Pico
+MAX_PAYLOAD = 128
+IMU_BATCH_MAX = 8
+IMU_GYR_LSB = 1.0 / 4096.0
+IMU_ACC_LSB = 1.0 / 1024.0
+IMU_F_GAP = 0x01
+IMU_F_CLAMPED = 0x02
+CFG_F_FLOW_ON = 0x01
 
 F_VALID = 0x01
 F_AFTER_GAP = 0x02
 F_TRIGGERED = 0x04
 F_DROPPED = 0x08
+F_PHASE = 0x10  # phase correlation (C++ only); n_tracked = response x 1000
+F_RANGE = 0x20  # MSG_CAM_VEL: height from the rangefinder
 
 _FLOW_FMT = "<IIIfffHBB"
 FLOW_LEN = struct.calcsize(_FLOW_FMT)
 assert FLOW_LEN == 28
+
+_CAM_VEL_FMT = "<IIIfffffHBB"
+CAM_VEL_LEN = struct.calcsize(_CAM_VEL_FMT)
+assert CAM_VEL_LEN == 36
+
+_UNIT_CFG_FMT = "<IfffffB3x"  # seq, height, cam yaw, TM171 roll/pitch/yaw, flags
+UNIT_CFG_LEN = struct.calcsize(_UNIT_CFG_FMT)
+assert UNIT_CFG_LEN == 28
+
+
+def unit_cfg_payload(seq: int, height_m: float, cam_yaw_rad: float, imu_rpy_rad, flags: int) -> bytes:
+    return struct.pack(_UNIT_CFG_FMT, seq & 0xFFFFFFFF, height_m, cam_yaw_rad, *imu_rpy_rad, flags & 0xFF)
+
+
+def imu_batch_payload(t0_us: int, seq: int, samples, flags: int = 0) -> bytes:
+    """samples: [(dt_us, (gx, gy, gz), (ax, ay, az))], FRD, rad/s and m/s^2."""
+    if not 1 <= len(samples) <= IMU_BATCH_MAX:
+        raise ValueError("1 .. 8 samples")
+    body = b""
+
+    def q(v, lsb):
+        nonlocal flags
+        x = v / lsb
+        if not x > -32767.0:
+            flags |= IMU_F_CLAMPED
+            return -32767
+        if x > 32767.0:
+            flags |= IMU_F_CLAMPED
+            return 32767
+        return int(x - 0.5) if x < 0 else int(x + 0.5)
+
+    for dt, g, a in samples:
+        body += struct.pack("<H3h3h", dt, *(q(v, IMU_GYR_LSB) for v in g), *(q(v, IMU_ACC_LSB) for v in a))
+    return struct.pack("<IHBB", t0_us & 0xFFFFFFFF, seq & 0xFFFF, len(samples), flags & 0xFF) + body
+
+
+def imu_batch_from_payload(p: bytes):
+    """(t0_us, seq, flags, [(dt_us, (gx, gy, gz), (ax, ay, az))])"""
+    t0, seq, n, flags = struct.unpack_from("<IHBB", p)
+    if not 1 <= n <= IMU_BATCH_MAX or len(p) != 8 + 14 * n:
+        raise ValueError("bad IMU batch length")
+    out = []
+    for i in range(n):
+        v = struct.unpack_from("<H3h3h", p, 8 + 14 * i)
+        out.append((v[0], tuple(x * IMU_GYR_LSB for x in v[1:4]), tuple(x * IMU_ACC_LSB for x in v[4:7])))
+    return t0, seq, flags, out
+
+
+def unit_cfg_from_payload(p: bytes):
+    """(seq, height_m, cam_yaw_rad, (roll, pitch, yaw), flags)"""
+    if len(p) != UNIT_CFG_LEN:
+        raise ValueError(f"UNIT_CFG payload is {len(p)} bytes, expected {UNIT_CFG_LEN}")
+    seq, h, y, r, pi, ya, fl = struct.unpack(_UNIT_CFG_FMT, p)
+    return seq, h, y, (r, pi, ya), fl
 
 
 _TIME_REQ_FMT = "<I"  # seq
@@ -103,9 +171,48 @@ class FlowMsg:
         return cls(*struct.unpack(_FLOW_FMT, p))
 
 
+@dataclass
+class CamVelMsg:
+    """MSG_CAM_VEL: the camera's velocity in camera axes, rotation removed on
+    the unit and scaled by height_m (field meanings in common/flow_link.h)."""
+    frame_seq: int
+    pi_time_us: int
+    pi_dt_us: int
+    vel_x_mps: float
+    vel_y_mps: float
+    stddev_mps: float
+    height_m: float
+    height_sd_m: float
+    n_tracked: int
+    exposure_100us: int
+    flags: int
+
+    def payload(self) -> bytes:
+        return struct.pack(
+            _CAM_VEL_FMT,
+            self.frame_seq & 0xFFFFFFFF,
+            self.pi_time_us & 0xFFFFFFFF,
+            min(max(self.pi_dt_us, 0), 0xFFFFFFFF),
+            self.vel_x_mps,
+            self.vel_y_mps,
+            self.stddev_mps,
+            self.height_m,
+            self.height_sd_m,
+            min(max(self.n_tracked, 0), 0xFFFF),
+            min(max(self.exposure_100us, 0), 0xFF),
+            self.flags & 0xFF,
+        )
+
+    @classmethod
+    def from_payload(cls, p: bytes) -> "CamVelMsg":
+        if len(p) != CAM_VEL_LEN:
+            raise ValueError(f"CAM_VEL payload is {len(p)} bytes, expected {CAM_VEL_LEN}")
+        return cls(*struct.unpack(_CAM_VEL_FMT, p))
+
+
 def frame(msg_type: int, payload: bytes) -> bytes:
     """Wrap a payload in sync, version, type, length and CRC."""
-    if len(payload) > 64:
+    if len(payload) > MAX_PAYLOAD:
         raise ValueError("payload too long")
     body = bytes((VERSION, msg_type, len(payload))) + payload
     return bytes((SYNC0, SYNC1)) + body + struct.pack("<H", crc16(body))

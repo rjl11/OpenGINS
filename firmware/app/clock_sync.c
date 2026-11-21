@@ -16,7 +16,8 @@ uint32_t clock_sync_request(clock_sync_t *c, uint64_t now)
 
 bool clock_sync_pending(clock_sync_t *c, uint64_t now)
 {
-    if (c->pending && now - c->t_req > CLOCK_SYNC_TIMEOUT_US) {
+    /* Signed: now may be a loop-pass time a little before t_req. */
+    if (c->pending && (int64_t)(now - c->t_req) > (int64_t)CLOCK_SYNC_TIMEOUT_US) {
         c->pending = false;
         c->timeouts++;
     }
@@ -121,7 +122,8 @@ bool clock_sync_reply(clock_sync_t *c, uint32_t seq, uint32_t turnaround_us, uin
 
 bool clock_sync_valid(const clock_sync_t *c, uint64_t now)
 {
-    return c->have && now - c->t_last < CLOCK_SYNC_STALE_US;
+    /* Signed: the last reply may be stamped a little after the caller's now. */
+    return c->have && (int64_t)(now - c->t_last) < (int64_t)CLOCK_SYNC_STALE_US;
 }
 
 bool clock_sync_to_pico(const clock_sync_t *c, uint32_t unit_us, uint64_t now, uint64_t *pico_us)

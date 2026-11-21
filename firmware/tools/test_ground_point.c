@@ -74,6 +74,36 @@ int main(void)
     double t = ground_tilt(rp);
     CHECK(fabs(cos(t) - cos(20 * D2R) * cos(20 * D2R)) < 1e-9, "tilt rp %.6f", t);
 
+    /* Cab roll: antenna 3 m up, roll centre 1 m up. The cab rolled 2 deg on
+     * its suspension over a level chassis: the ground point moves by the 2 m
+     * above the roll centre only, not by all 3 m. */
+    {
+        const double p0[3] = { 59.0 * D2R, 17.0 * D2R, 40.0 };
+        const double cab2[3] = { 2 * D2R, 0, 0 };
+        double p1[3], neu[3];
+        ground_point_cab(p0, cab2, 0.0, 0.0, 3.0f, 1.0f, p1);
+        diff_m(p0, p1, neu);
+        CHECK(fabs(neu[1] + 2 * sin(2 * D2R)) < 0.002 && fabs(neu[0]) < 0.002 &&
+                  fabs(neu[2] + 2 * cos(2 * D2R) + 1) < 1e-6,
+              "cab 2 deg: got N %.4f E %.4f U %.4f", neu[0], neu[1], neu[2]);
+        /* Cab and chassis on the same 5 deg slope (no sway): the same point
+         * as one roll over the whole height. */
+        const double cab5[3] = { 5 * D2R, 0, 0.7 };
+        double q1[3], q2[3];
+        ground_point_cab(p0, cab5, 5 * D2R, 0.0, 3.0f, 1.0f, q1);
+        const float down3b[3] = { 0.0f, 0.0f, 3.0f };
+        ground_point(p0, cab5, down3b, q2);
+        diff_m(q1, q2, neu);
+        CHECK(fabs(neu[0]) < 1e-6 && fabs(neu[1]) < 1e-6 && fabs(neu[2]) < 1e-9,
+              "cab = chassis: differs by N %.6f E %.6f U %.6f", neu[0], neu[1], neu[2]);
+        /* The chassis pitched 1 deg nose up under a level cab: the lower part
+         * leans forward (north at yaw 0). */
+        ground_point_cab(p0, level, 0.0, 1 * D2R, 3.0f, 1.0f, p1);
+        diff_m(p0, p1, neu);
+        CHECK(fabs(neu[0] - sin(1 * D2R)) < 0.002 && fabs(neu[1]) < 0.002, "chassis pitch: N %.4f E %.4f", neu[0],
+              neu[1]);
+    }
+
     printf(s_fail ? "%d FAILED\n" : "all passed\n", s_fail);
     return s_fail != 0;
 }

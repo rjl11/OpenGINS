@@ -242,7 +242,8 @@ static void attach_gnss(ins_measurements_t *m, const nav_gnss_t *g)
     }
 }
 
-/* Ground speed (REQ-NAV-068), history-anchored like GNSS. INSLIB's own
+/* Ground speed (REQ-NAV-068) or body velocity (REQ-NAV-096), history-
+ * anchored like GNSS. INSLIB's own
  * speed_scale / speed_stddev_rel stay at their defaults: each source puts
  * its scale and its proportional error into the sample. */
 static void attach_speed(ins_measurements_t *m, const nav_speed_t *sp)
@@ -255,11 +256,28 @@ static void attach_speed(ins_measurements_t *m, const nav_speed_t *sp)
         s_work.n_speed_late++;
         return;
     }
-    m->speed.speed_mps = sp->speed_mps;
-    m->speed.stddev_mps = sp->sd_mps;
-    m->speed.is_valid = true;
-    m->speed_delay_ms = (int)(age_us / 1000);
-    m->speed_delay_us = (int32_t)(age_us % 1000);
+    if (sp->has_vel_b) {
+        /* Body velocity (REQ-NAV-096): x / y measured, z left out by its
+         * zero variance; the lever arm is applied already (flow_nav.c). */
+        m->body_vel.vel_b[0] = sp->vel_b[0];
+        m->body_vel.vel_b[1] = sp->vel_b[1];
+        m->body_vel.vel_b[2] = 0.0f;
+        memset(m->body_vel.Qll_b, 0, sizeof m->body_vel.Qll_b);
+        m->body_vel.Qll_b[0] = sp->Qll_b[0];
+        m->body_vel.Qll_b[1] = sp->Qll_b[1];
+        m->body_vel.Qll_b[3] = sp->Qll_b[1];
+        m->body_vel.Qll_b[4] = sp->Qll_b[2];
+        m->body_vel.is_valid = true;
+        memset(m->body_vel_leverarm_b, 0, sizeof m->body_vel_leverarm_b);
+        m->body_vel_delay_ms = (int)(age_us / 1000);
+        m->body_vel_delay_us = (int32_t)(age_us % 1000);
+    } else {
+        m->speed.speed_mps = sp->speed_mps;
+        m->speed.stddev_mps = sp->sd_mps;
+        m->speed.is_valid = true;
+        m->speed_delay_ms = (int)(age_us / 1000);
+        m->speed_delay_us = (int32_t)(age_us % 1000);
+    }
     if (sp->source < NAV_SPEED_SOURCES) {
         s_work.n_speed[sp->source]++;
     }
@@ -292,8 +310,8 @@ static void publish(uint64_t now)
     }
     o->n_imu_loss = s_suite.n_imu_loss;
     const ins_diag_t *d = ins_get_diag(&s_suite.ins);
-    o->n_speed_used = d->n_speed_used;
-    o->n_speed_skipped = d->n_speed_skipped;
+    o->n_speed_used = d->n_speed_used + d->n_body_vel_used;
+    o->n_speed_skipped = d->n_speed_skipped + d->n_body_vel_skipped;
 
     /* Same order as nav_suite_get_rpy(). */
     float r, p, y;

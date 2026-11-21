@@ -65,6 +65,15 @@ button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
 <label><span>x forward</span><input name="flow_lever_x" inputmode="decimal"></label>
 <label><span>y right</span><input name="flow_lever_y" inputmode="decimal"></label>
 <label><span>z down</span><input name="flow_lever_z" inputmode="decimal"></label>
+<p class="note">Front camera unit only: its TM171 against the vehicle body, sent to the unit once a second with the height and image direction above. 0 0 0 = mounted level, x forward.</p>
+<label><span>TM171 roll<small>deg</small></span><input name="front_imu_roll_deg" inputmode="decimal"></label>
+<label><span>TM171 pitch<small>deg</small></span><input name="front_imu_pitch_deg" inputmode="decimal"></label>
+<label><span>TM171 yaw<small>deg</small></span><input name="front_imu_yaw_deg" inputmode="decimal"></label>
+<label><span>TM171 x forward<small>m from the roof IMU</small></span><input name="front_imu_lever_x" inputmode="decimal"></label>
+<label><span>TM171 y right<small>m</small></span><input name="front_imu_lever_y" inputmode="decimal"></label>
+<label><span>TM171 z down<small>m</small></span><input name="front_imu_lever_z" inputmode="decimal"></label>
+<label><span>TM171 as backup IMU<small>when the roof TM210 is lost</small></span><select name="front_imu_backup"><option value="on">on</option><option value="off">off</option></select></label>
+<label><span>cab roll centre<small>m above the ground, 0 = off (tractor: the ground point follows the chassis below it)</small></span><input name="cab_roll_centre_m" inputmode="decimal"></label>
 </section>
 <section><h2>Filter tuning</h2>
 <p class="note">IMU noise figures. Applies live: the filter restarts.</p>

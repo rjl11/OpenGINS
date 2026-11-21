@@ -40,12 +40,24 @@ void field_io_imu(const nav_imu_t *n);
 bool field_io_poll(uint64_t now);
 
 /* A whole flow-link frame (common/flow_link.h: sync to CRC) that came on the
- * USB port (usb_log.h, command "flow <hex>") or as a UDP datagram from the
- * front camera unit (eth.h, socket 2) instead of the PIO UART. Checked like
- * a link frame, then handled the same way; the camera is free-running on
- * both, so it is timed by its arrival (or by the clock sync, below). False
- * if it is malformed or its CRC is wrong. */
+ * USB port (usb_log.h, command "flow <hex>") instead of the PIO UART.
+ * Checked with flow_link_check(), counted in the USB counters
+ * (usb_frames, usb_bad), then handled as field_io_link_frame(). False if it
+ * is malformed or its CRC is wrong. */
 bool field_io_usb_flow(const uint8_t *frame, size_t n, uint64_t t_arrival_us);
+
+/* One already checked flow-link message (type and payload), handled the
+ * same way as a frame from the PIO UART: from the front camera unit over
+ * UDP (eth.h, socket 2, which keeps its own counters) and from
+ * field_io_usb_flow(). The camera is free-running on both, so it is timed
+ * by its arrival (or by the clock sync, below). False if the payload is
+ * too long. */
+bool field_io_link_frame(uint8_t type, const uint8_t *payload, size_t len, uint64_t t_arrival_us);
+
+/* FLOW_MSG_IMU_BATCH from the front unit (USB or UDP) goes here, whether the
+ * flow is on or not (main.c: the backup IMU and the chassis tilt). */
+typedef void (*field_io_imu_batch_fn)(const uint8_t *payload, size_t len, uint64_t t_arrival_us);
+void field_io_set_imu_batch_fn(field_io_imu_batch_fn fn);
 
 /* The clock sync with the front camera unit (eth.h): while it is valid,
  * free-running frames are timed by the unit's own timestamp (flow_nav.h). */

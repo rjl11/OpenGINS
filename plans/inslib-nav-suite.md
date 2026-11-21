@@ -85,6 +85,13 @@ Antenna vs IMU vs vehicle reference point: output the position of the point AgOp
 ## Diagnostics (web page)
 Mode, `nav_suite_get_zaru_active()`, `nav_suite_get_vertical_zupt_active()`, `suite.n_imu_loss`, INS vs ARS/AHRS yaw difference, estimated gyro/acc biases, the estimated mag hard-iron bias (`ins_get_bias_mag()`) and measured |B| against the WMM field, IMU temperature from the TM210 status object.
 
+## Forked INSLIB
+`external/INSLIB` points at our fork of `jnz/INSLIB`, not at upstream. The fork adds one feature on its branch `body-vel`: the body-frame velocity input REQ-NAV-096 (`ins_meas_body_vel_t`, `body_vel_leverarm_b`, `body_vel_delay_ms/us` in `ins_measurements_t`, `ins_fuse_body_vel()`, its diagnostics counters, its requirement in `requirements/req_ins.md` and `scenario_body_vel_aiding` in `tests/test_ins_core.c`). Optical flow ([optical-flow-aiding.md](optical-flow-aiding.md)) and later wheel odometry ([wheel-odometry-aiding.md](wheel-odometry-aiding.md)) need it, and upstream has no such input. It stays in the fork: no pull request or issue upstream.
+- **Keep the diff to that one feature.** Fixes that aren't about it stay out of the fork.
+- **New upstream release:** in `external/INSLIB`, `git fetch upstream --tags`, `git rebase <tag> body-vel`, run INSLIB's `make test` (on a Linux host; it takes about 15 minutes on dietpi), push the branch to the fork (`--force-with-lease`), then commit the new submodule pointer here with a firmware build and `check_ram_path.py`.
+- The remotes in the submodule are `origin` = the fork and `upstream` = `jnz/INSLIB`. A fresh clone gets only `origin`; add `upstream` by hand before rebasing.
+- The new measurement fields are appended to the end of `ins_measurements_t`, and `ins_options_t` is unchanged. INSLIB's Python bindings mirror only `ins_options_t` and reach the rest through C accessors, so they and INSLIB's tools need no change (they don't offer the new input either).
+
 ## Verification
 1. Record a drive: TM210 raw, UM980 logs and BMP581 pressure, all timestamped on the Pico clock (SD card or USB). Convert to INSLIB's CSV layout (`external/INSLIB/doc/example_imu.csv`, `example_gnss.csv`).
 2. Run the host `tools/replay.c` build on it and check the trajectory and heading (`tools/ins_kml.py`, `tools/ins_plots.py`).

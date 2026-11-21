@@ -9,7 +9,8 @@
 #define RX_DMA_COUNT        (1u << 24)
 
 bool uart_dma_init(uart_dma_t *u, uart_inst_t *uart, unsigned tx_pin, unsigned rx_pin,
-                   unsigned baud, uint8_t *rx_buf, unsigned rx_size_bits)
+                   unsigned baud, uint8_t *rx_buf, unsigned rx_size_bits, uint8_t *tx_buf,
+                   unsigned tx_size_bits)
 {
     u->uart = uart;
     u->rx_buf = rx_buf;
@@ -20,6 +21,8 @@ bool uart_dma_init(uart_dma_t *u, uart_inst_t *uart, unsigned tx_pin, unsigned r
     u->overruns = 0;
     u->rx_count = 0;
     u->rx_overflows = 0;
+    u->tx_buf = tx_buf;
+    u->tx_mask = (1u << tx_size_bits) - 1u;
     u->tx_head = 0;
     u->tx_tail = 0;
     u->tx_dropped = 0;
@@ -96,21 +99,21 @@ void uart_dma_poll(uart_dma_t *u)
 {
     while (u->tx_tail != u->tx_head && uart_is_writable(u->uart)) {
         uart_get_hw(u->uart)->dr = u->tx_buf[u->tx_tail];
-        u->tx_tail = (u->tx_tail + 1u) & (UART_DMA_TX_SIZE - 1u);
+        u->tx_tail = (u->tx_tail + 1u) & u->tx_mask;
     }
 }
 
 bool uart_dma_write(uart_dma_t *u, const void *data, size_t len)
 {
-    uint32_t used = (u->tx_head - u->tx_tail) & (UART_DMA_TX_SIZE - 1u);
-    if (len > (UART_DMA_TX_SIZE - 1u) - used) {
+    uint32_t used = (u->tx_head - u->tx_tail) & u->tx_mask;
+    if (len > u->tx_mask - used) {
         u->tx_dropped += (uint32_t)len;
         return false;
     }
     const uint8_t *p = data;
     for (size_t i = 0; i < len; i++) {
         u->tx_buf[u->tx_head] = p[i];
-        u->tx_head = (u->tx_head + 1u) & (UART_DMA_TX_SIZE - 1u);
+        u->tx_head = (u->tx_head + 1u) & u->tx_mask;
     }
     uart_dma_poll(u);
     return true;

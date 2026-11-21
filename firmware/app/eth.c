@@ -20,7 +20,7 @@
 #define SOCK_AOG          3u
 #define AOG_PORT          8888u    /* module PGNs from AgIO / AgOpenWeb */
 #define AOG_REPLY_PORT    9999u
-#define FRONT_DGRAM_MAX   128u     /* a flow_link frame is at most 71 bytes */
+#define FRONT_DGRAM_MAX   160u     /* a flow_link frame is at most 135 bytes */
 /* Clock sync requests: faster for the first few, so the sync is valid a
  * few seconds after the unit's first frame. */
 #define SYNC_PERIOD_US       1000000u
@@ -31,6 +31,7 @@
 #define PHY_PERIOD_US     250000u
 #define RTCM_PERIOD_US    1000u    /* datagrams come >= 10 ms apart (plan) */
 #define RTCM_PER_POLL     8u
+#define FRONT_PER_POLL    8u
 #define RTCM_DGRAM_MAX    600u     /* AgOpenWeb: <= 256, bridge ceiling 512 */
 
 static w5500_t        s_w;
@@ -50,6 +51,11 @@ static uint8_t        s_front_ip[4];
 static uint16_t       s_front_port;
 static clock_sync_t   s_sync;
 static uint64_t       s_next_sync;
+/* The front unit's settings and heartbeat (FLOW_MSG_UNIT_CFG), once a second. */
+static flow_msg_unit_cfg_t s_ucfg;
+static uint32_t       s_ucfg_seq;
+static uint64_t       s_next_ucfg;
+#define UNIT_CFG_PERIOD_US 1000000u
 static eth_status_t   s_st; /* the counters; state fields filled on read */
 
 const char *eth_state_name(eth_state_t s)
@@ -80,6 +86,7 @@ void eth_init(eth_rtcm_out_fn rtcm_out, eth_flow_in_fn flow_in)
 
 void eth_apply_settings(const settings_t *s)
 {
+    settings_unit_cfg(s, 0, &s_ucfg); /* sent from the next second on */
     if (s->eth_fitted == s_fitted && memcmp(s->eth_ip, s_ip, 4) == 0 &&
         memcmp(s->eth_mask, s_mask, 4) == 0 && memcmp(s->eth_gw, s_gw, 4) == 0) {
         return;
@@ -107,7 +114,9 @@ static void configure(void)
     if (rc == W5500_OK) rc = w5500_udp_open(&s_w, SOCK_FRONT, (uint16_t)APP_ETH_FRONT_PORT);
     if (rc == W5500_OK) rc = w5500_udp_open(&s_w, SOCK_AOG, (uint16_t)AOG_PORT);
     if (rc != W5500_OK) {
-        printf("[eth] socket setup failed: %s\n", w5500_strerror(rc));
+        printf("[eth] socket setup failed: %s; retrying in %u s\n", w5500_strerror(rc),
+               (unsigned)(RETRY_US / 1000000u));
+        s_next_retry = time_us_64() + RETRY_US;
         return;
     }
     s_socks_open = true;
@@ -146,6 +155,7 @@ static void start(uint64_t now)
         return;
     }
     printf("[eth] W5500 found, SPI %lu Hz\n", (unsigned long)s_w.baud_actual);
+    memset(&s_phy, 0, sizeof s_phy); /* so the first link up is reported */
     s_state = ETH_NO_LINK;
     s_next_phy = now;
     configure();
@@ -155,8 +165,11 @@ static void on_frame(void *ctx, const uint8_t *f, size_t len)
 {
     (void)ctx;
     s_st.rtcm_last_type = rtcm_frame_msg_type(f, len);
-    if (s_rtcm_out != NULL && s_rtcm_out(f, len)) {
+    const eth_rtcm_result_t r = s_rtcm_out != NULL ? s_rtcm_out(f, len) : ETH_RTCM_NOT_SELECTED;
+    if (r == ETH_RTCM_FORWARDED) {
         s_st.rtcm_forwarded++;
+    } else if (r == ETH_RTCM_REFUSED) {
+        s_st.rtcm_refused++;
     } else {
         s_st.rtcm_dropped++;
     }
@@ -182,60 +195,114 @@ static bool rtcm_poll(uint64_t now)
     return worked;
 }
 
-static bool front_poll(uint64_t now)
+static bool front_poll(void)
 {
     static uint8_t buf[FRONT_DGRAM_MAX];
     bool worked = false;
-    for (unsigned i = 0; i < RTCM_PER_POLL; i++) {
+    for (unsigned i = 0; i < FRONT_PER_POLL; i++) {
         uint8_t ip[4];
         uint16_t port;
+        /* Taken just before the read, not at the start of the loop pass:
+         * the datagram is already in the chip, so this is after its
+         * arrival by at most the time since the last poll, and never
+         * before it (the clock sync's round trip, the flow frame's
+         * arrival). */
+        const uint64_t t_rx = time_us_64();
         int n = w5500_udp_recv(&s_w, SOCK_FRONT, ip, &port, buf, sizeof buf);
         if (n <= 0) {
             break;
         }
         worked = true;
         s_st.front_datagrams++;
-        s_front_last_us = now;
+        uint8_t type;
+        int len = flow_link_check(buf, (size_t)n, &type);
+        if (len < 0) {
+            s_st.front_rejected++; /* not a flow_link frame: its sender is not adopted */
+            continue;
+        }
         if (memcmp(ip, s_front_ip, 4) != 0 || port != s_front_port) {
+            if (s_front_port != 0 && t_rx - s_front_last_us <= FRONT_GONE_US) {
+                /* A second sender while the unit still sends: its frames
+                 * would be timed by the wrong clock. A restarted unit is
+                 * taken once the old address has been silent for
+                 * FRONT_GONE_US. */
+                s_st.front_other++;
+                continue;
+            }
             /* Another unit, or the same one restarted on a new port: its
              * clock is a different one. */
             memcpy(s_front_ip, ip, 4);
             s_front_port = port;
             clock_sync_init(&s_sync);
-            s_next_sync = now;
+            s_next_sync = t_rx;
             printf("[eth] front unit at %u.%u.%u.%u:%u\n", ip[0], ip[1], ip[2], ip[3], port);
         }
+        s_front_last_us = t_rx;
         memcpy(s_st.front_src_ip, ip, 4);
-        uint8_t type;
-        int len = flow_link_check(buf, (size_t)n, &type);
-        if (len >= 0 && type == FLOW_MSG_TIME_RESP) {
+        const uint8_t *payload = &buf[FLOW_LINK_HEADER_LEN];
+        if (type == FLOW_MSG_TIME_RESP) {
             flow_msg_time_resp_t r;
-            if (flow_link_decode_time_resp(&buf[FLOW_LINK_HEADER_LEN], (size_t)len, &r) == 0) {
-                clock_sync_reply(&s_sync, r.seq, r.turnaround_us, r.unit_rx_us, now);
+            if (flow_link_decode_time_resp(payload, (size_t)len, &r) == 0) {
+                clock_sync_reply(&s_sync, r.seq, r.turnaround_us, r.unit_rx_us, t_rx);
+            } else {
+                s_st.front_rejected++;
             }
-        } else if (s_flow_in == NULL || !s_flow_in(buf, (size_t)n, now)) {
+        } else if (s_flow_in == NULL || !s_flow_in(type, payload, (size_t)len, t_rx)) {
             s_st.front_rejected++;
         }
     }
     return worked;
 }
 
+/* The unit's settings and heartbeat, once a second while it is there. */
+static bool unit_cfg_poll(uint64_t now)
+{
+    if (s_front_port == 0 || (int64_t)(now - s_front_last_us) > (int64_t)FRONT_GONE_US || now < s_next_ucfg) {
+        return false;
+    }
+    uint8_t f[FLOW_LINK_UNIT_CFG_FRAME_LEN];
+    s_ucfg.seq = s_ucfg_seq + 1u;
+    size_t n = flow_link_encode_unit_cfg(&s_ucfg, f, sizeof f);
+    int rc = w5500_udp_send(&s_w, SOCK_FRONT, s_front_ip, s_front_port, f, n);
+    if (rc == W5500_E_BUSY) {
+        return true; /* the previous datagram is still going out: next pass */
+    }
+    if (rc == W5500_OK || rc == W5500_E_SEND_FAIL) {
+        s_ucfg_seq++;
+        s_st.unit_cfg_sent++;
+    }
+    s_next_ucfg = now + UNIT_CFG_PERIOD_US;
+    return true;
+}
+
 /* One time request to the unit, when due. */
 static bool sync_poll(uint64_t now)
 {
-    if (s_front_port == 0 || now - s_front_last_us > FRONT_GONE_US || clock_sync_pending(&s_sync, now) ||
-        now < s_next_sync) {
+    /* Signed: s_front_last_us may be a little after this pass's now. */
+    if (s_front_port == 0 || (int64_t)(now - s_front_last_us) > (int64_t)FRONT_GONE_US ||
+        clock_sync_pending(&s_sync, now) || now < s_next_sync) {
         return false;
     }
     uint8_t f[FLOW_LINK_TIME_REQ_FRAME_LEN];
     const uint32_t seq = s_sync.seq + 1u;
     size_t n = flow_link_encode_time_req(seq, f, sizeof f);
-    if (w5500_udp_send(&s_w, SOCK_FRONT, s_front_ip, s_front_port, f, n) == W5500_E_BUSY) {
+    int rc = w5500_udp_send(&s_w, SOCK_FRONT, s_front_ip, s_front_port, f, n);
+    if (rc == W5500_E_BUSY) {
         return true; /* the previous datagram is still going out: next pass */
     }
-    /* Timed after SEND: the W5500 puts the frame on the wire within
-     * microseconds of the command (no ARP once the unit has sent to us). */
-    clock_sync_request(&s_sync, time_us_64());
+    if (rc != W5500_OK && rc != W5500_E_SEND_FAIL) {
+        /* Nothing went out: not a request, so not a lost reply either. */
+        s_st.sync_send_errors++;
+        s_next_sync = now + SYNC_PERIOD_US;
+        return true;
+    }
+    /* Timed by the SEND command itself (w5500.h, send_us), not after the
+     * wait for the chip to take it. The destination is written to the chip
+     * only when it changes, so the unit's address should not be resolved
+     * by ARP again on every request; a request that does wait for ARP gets
+     * a long round trip and is left out of the fit. The chip's own delay
+     * from SEND to the wire is not yet measured. */
+    clock_sync_request(&s_sync, s_w.send_us[SOCK_FRONT]);
     s_next_sync = now + (s_sync.requests <= SYNC_FAST_COUNT ? SYNC_FAST_PERIOD_US : SYNC_PERIOD_US);
     return true;
 }
@@ -303,9 +370,23 @@ bool eth_poll(uint64_t now)
         }
         return false;
     }
+    if (!s_socks_open && now >= s_next_retry) {
+        configure(); /* the last socket setup failed */
+        return true;
+    }
     bool worked = false;
     if (now >= s_next_phy) {
         s_next_phy = now + PHY_PERIOD_US;
+        if (!w5500_alive(&s_w)) {
+            /* Reset by a glitch, or unplugged: its settings are gone. */
+            printf("[eth] W5500 stopped answering; starting over\n");
+            w5500_hold_reset(&s_w);
+            memset(&s_phy, 0, sizeof s_phy);
+            s_socks_open = false;
+            s_state = ETH_NOT_FOUND;
+            s_next_retry = now;
+            return true;
+        }
         bool was = s_phy.link;
         w5500_phy(&s_w, &s_phy);
         if (s_phy.link != was) {
@@ -319,15 +400,17 @@ bool eth_poll(uint64_t now)
     if (s_state == ETH_UP && s_socks_open && now >= s_next_rtcm) {
         s_next_rtcm = now + RTCM_PERIOD_US;
         worked |= rtcm_poll(now);
-        worked |= front_poll(now);
+        worked |= front_poll();
         worked |= aog_poll();
     } else if (s_state == ETH_UP && s_socks_open && clock_sync_pending(&s_sync, now)) {
         /* A reply is due: read it on every pass, not every 1 ms, so its
          * arrival time is close. */
-        worked |= front_poll(now);
+        worked |= front_poll();
     }
     if (s_state == ETH_UP && s_socks_open) {
-        worked |= sync_poll(now);
+        const bool req = sync_poll(now);
+        worked |= req;
+        if (!req) worked |= unit_cfg_poll(now); /* never in the pass of a time request */
     }
     return worked;
 }
@@ -350,6 +433,12 @@ void eth_send_paogi(const char *line, size_t len)
     }
 }
 
+/* Age in ms, 0 for a time stamped a little after now. */
+static int32_t age_ms(uint64_t now, uint64_t t)
+{
+    return now > t ? (int32_t)((now - t) / 1000u) : 0;
+}
+
 void eth_get_status(eth_status_t *st, uint64_t now)
 {
     *st = s_st;
@@ -359,8 +448,8 @@ void eth_get_status(eth_status_t *st, uint64_t now)
     st->full_duplex = s_phy.full_duplex;
     st->rtcm_frames = s_rtcm.frames;
     st->rtcm_crc_errors = s_rtcm.crc_errors;
-    st->rtcm_age_ms = s_rtcm_last_us == 0 ? -1 : (int32_t)((now - s_rtcm_last_us) / 1000u);
-    st->front_age_ms = s_front_last_us == 0 ? -1 : (int32_t)((now - s_front_last_us) / 1000u);
+    st->rtcm_age_ms = s_rtcm_last_us == 0 ? -1 : age_ms(now, s_rtcm_last_us);
+    st->front_age_ms = s_front_last_us == 0 ? -1 : age_ms(now, s_front_last_us);
     st->sync_valid = clock_sync_valid(&s_sync, now);
     st->sync_offset_us = s_sync.have ? clock_sync_offset_us(&s_sync, now) : 0.0;
     st->sync_drift_ppm = s_sync.have ? (float)clock_sync_drift_ppm(&s_sync) : 0.0f;
