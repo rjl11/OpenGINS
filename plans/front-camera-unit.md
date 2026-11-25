@@ -29,6 +29,7 @@ All figures marked "estimate" are estimates, not yet measured.
 | Night light | 850 nm IR LEDs pulsed by the camera's strobe output, wired at the unit (the OV9281 is mono with no IR filter) |
 | Power and data | One PoE cable from the cab: a PoE splitter or HAT at the unit, a 12 V PoE injector or switch in the cab. Sealed M12 D-coded connectors |
 | Network | A small switch in the cab joins the Pico's W5500, the front unit and the AgOpenWeb tablet on 192.168.5.x |
+| Housing | **Bench / field-test box designed 2026-11-25**, not yet printed: [hardware/front_unit/](../hardware/front_unit/README.md) (OpenSCAD). Vented, open lens aperture, no PoE. It holds the ROCK 4SE above the camera, the TM171 and the TF-Luna, with the TF-Luna's beam 26.5 mm from the optical axis. It has ears with M6 slots and M5 inserts. Rebuilt the same day from the user's caliper readings, Radxa's ROCK 4SE drawing (the RK3399 is on the underside, above the camera) and SYD's TM171 STEP models. No fan for now. The sealed tractor housing (hooded window, PoE, M12) is still to design |
 
 Mount the unit rigidly to the chassis: the front weight carrier or the bumper, looking down, clear of a front linkage implement, a loader and the weights.
 
@@ -108,7 +109,15 @@ That replaces one roll over the whole antenna height. At 3 m, 1° of cab sway ta
 - **Bench checks:** with the antenna height 0 in AgOpenWeb, the shown position must not move when the unit is rolled; whatever else AgOpenWeb uses the roll for (display, a roll correction for steering) still works.
 
 ## Rangefinder: TF-Luna
-Bought 2026-11-20 (Waveshare's [TF-Luna wiki](https://www.waveshare.com/wiki/TF-Luna_LiDAR_Range_Sensor)). Figures below are from Benewake's product manual, `docs/datasheets/SJ-PM-TF-Luna_A05_Product_Manual.pdf`; none measured here yet.
+Bought 2026-11-20 (Waveshare's [TF-Luna wiki](https://www.waveshare.com/wiki/TF-Luna_LiDAR_Range_Sensor)). Figures below are from Benewake's product manual, `docs/datasheets/SJ-PM-TF-Luna_A05_Product_Manual.pdf`, and its two-page datasheet, `docs/datasheets/SJ-GU-TF-Luna_A05_Datasheet.pdf`; none measured here yet. The datasheet adds: the 0.2–8 m / 0.2–2.5 m ranges hold outdoors at 90 klux too (both at 25 °C on a white board); output 1–250 Hz (500/n); ≤ 0.35 W; I2C slave up to 400 kbit/s at default address 0x10 (0x08–0x77); storage −20 to 75 °C. It gives the height as 12.5 mm where its own drawing, the manual and Waveshare's wiki show 13.5 mm over the lens rims (12 mm body); the housing uses the drawing.
+
+What Waveshare's wiki adds to Benewake's documents (read 2026-11-25; its spec table repeats the datasheet):
+- **Bench signs:** when powered, a faint red glow shows in the emitting lens seen from the front. It gets slightly warm in continuous use; Waveshare calls that normal.
+- **Supply:** 3.7–5.2 V only, no 3.3 V version. The logic stays 3.3 V.
+- **Pin 6 in I/O (switching) mode:** high (3.3 V) or low by distance with a hysteresis band, near and far levels; in I2C mode with switching off it is data-ready. Not used here.
+- **Several units:** two side by side whose spots overlap on one object don't interfere; more than two do, and two facing each other interfere badly. Matters if a second TF-Luna (UAV, rear unit) ever looks at the same ground.
+- **Host tools:** Benewake's Windows "TF host computer" program shows Dist, Strength and the valid points per second over a USB-TTL adapter; with format 0x06 (mm) it still labels the values cm. Its demo package (Pi C / Python, Pico MicroPython, Arduino, ESP32; UART and I2C reading) adds nothing to `pi/flow/src/tfluna.cpp`.
+- **Pi wiring in its examples:** UART on GPIO14/15 with the serial console turned off, I2C on GPIO2/3. The ROCK 4SE's header differs ([hardware/front_unit/README.md](../hardware/front_unit/README.md), "UARTs on the ROCK 4SE").
 
 ### What it is
 - **Principle:** phase-shift ToF with an 850 nm VCSEL (Class 1), FoV 2° (theoretical). It ranges 500 times a second internally; at an output rate of 500/n Hz each value is the mean of the last n ranges (100 Hz default: 5 ranges, so a value describes about the last 10 ms).
@@ -160,7 +169,7 @@ Bought 2026-11-20 (Waveshare's [TF-Luna wiki](https://www.waveshare.com/wiki/TF-
 2. De-rotation on the unit with the TM171 gyro, the camera-velocity message, the `flow_nav.c` path for it. Bench test over USB first (`flow --usb`, as today). The message and the Pico path are done (2026-11-21, host-tested), and so is the unit's side: `flow --tm171` de-rotates each frame pair with the TM171 gyro, scales by the range (or the set height over the TM171's tilt) and sends `FLOW_MSG_CAM_VEL` (2026-11-21, run on dietpi standing still: every frame pair converted, ±0.003 m/s at rest). Into the Pico over USB (2026-11-21, `flow --usb --tm171`, 20 s standing still): all 2054 camera velocities used, 10 Hz samples to INSLIB at 0.00 m/s; INSLIB didn't fuse them because that Pico had no GNSS and its INS wasn't running. Still to check: the signs with the camera moving, and the fusion with the INS running (GNSS fitted).
 3. W5500 on the Pico ([ethernet-w5500-agopenweb.md](ethernet-w5500-agopenweb.md)), socket 2, the clock sync, flow over UDP. Code for socket 2, flow over UDP and the clock sync written 2026-11-20; not yet run against a W5500.
 4. TF-Luna on the unit: a reader in `pi/flow/` (settings sent at start, the 9-byte frame, the Amp gate, timestamps), logged next to the flow (written 2026-11-20, `flow --lidar` and `tfluna`); bench checks of its accuracy over soil, its own filters on and off, and the 850 nm spot in the camera image. Then the height in the message, and the scale learned under RTK.
-5. Front mount on the tractor, PoE, the lever arm measured; drive against RTK. Aim the camera and set the focus with `flow`'s preview page (`http://<unit>:8080/` from the tablet on the cab switch, or the "Front camera" chip on the Pico's status page).
+5. Front mount on the tractor, PoE, the lever arm measured (the bench / field-test box in [hardware/front_unit/](../hardware/front_unit/README.md) comes first: print, fit, and check the image corners and the TF-Luna against the camera); drive against RTK. Aim the camera and set the focus with `flow`'s preview page (`http://<unit>:8080/` from the tablet on the cab switch, or the "Front camera" chip on the Pico's status page).
 6. TM171 batches to the Pico, the backup switching, a test with the TM210 unplugged. Written 2026-11-21 (above, "Backup IMU for the roof TM210"); the TM210-unplugged test is still to do.
 7. Chassis roll and the cab-roll ground point; bench check of the roll-centre height and of AgOpenWeb with an antenna height of 0. Written 2026-11-21 (above, "Cab-suspension roll"); the roll-centre height and the AgOpenWeb check are still to do.
 

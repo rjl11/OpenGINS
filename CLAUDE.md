@@ -42,6 +42,7 @@ The output is `firmware/build/app.uf2` (and `app.elf` for SWD). The GNSS antenna
 
 - `pi/flow/`: optical flow on a Raspberry Pi with the OV9281 camera, sent to the Pico (`pi/flow/README.md`, `plans/optical-flow-aiding.md`). C++17 with CMake; OpenCV and libcamera come from the OS packages (`libopencv-dev`, `libcamera-dev`), never as submodules. Build with `cmake -S pi/flow -B pi/flow/build -G Ninja` and `ninja -C pi/flow/build`, test with `pi/flow/build/test_flow`, `pi/flow/build/test_tfluna` (the TF-Luna rangefinder's reader) and `pi/flow/build/test_tm171` (the TM171 reader and the de-rotation on the front camera unit), all in `pi/flow/`. `pi/flow/python/` is the first Python version, kept as the reference. Linux code for the Pi goes under `pi/`, one folder per program. Clone on the Pi without `--recursive`; it needs no submodule.
 - `common/`: headers shared by the Pico firmware and the Pi code. `common/flow_link.h` is the flow link format (flow from the Pi; over UDP also the Pico's clock sync requests and the unit's replies), used by the C++ program directly; `pi/flow/python/flow_link.py` mirrors it, and `firmware/tools/test_flow_link.c`, `pi/flow/tests/test_flow.cpp` and `pi/flow/python/test_flow_link.py` all check the same example frames, so change both sides in one commit.
+- `hardware/`: 3D-printed parts in OpenSCAD (2021.01 on the PC, `winget install OpenSCAD.OpenSCAD`), one folder per part, all dimensions in its `dims.scad` with their sources. `hardware/front_unit/` is the front camera unit's bench box; run its `check.sh` (clearances) and `export.sh` (STLs and pictures) from Git Bash after a change.
 
 ## Submodules
 
@@ -55,7 +56,7 @@ git submodule update --init --recursive
 
 - `external/CAM-OV9281RAW-V2`: INNO-MAKER's repo for the CAM-MIPI9281RAW-V2 (OV9281 global-shutter camera for the Raspberry Pi, bought for optical flow, `plans/optical-flow-aiding.md`): user manual PDF, trigger tools in `ov9281_libcamera/`, old drivers in `Legacy/`. Reference only, nothing here builds it.
 
-Not a submodule: `external/syd_dynamics` is a plain vendored copy of SYD Dynamics' TransducerM examples and the TM210 3D model. It is the EasyProfile protocol reference for the TM210 (see its `README.md`), and it is not compiled. `temp/` is git-ignored scratch space.
+Not a submodule: `external/syd_dynamics` is a plain vendored copy of SYD Dynamics' TransducerM examples and the TM210 and TM171 3D models (STEP; the TM171's core and baseboard also combined into one, by `hardware/front_unit/tm171_combine.py`). It is the EasyProfile protocol reference for the TM210 (see its `README.md`), and it is not compiled. `temp/` is git-ignored scratch space.
 
 ## Plans and docs
 
