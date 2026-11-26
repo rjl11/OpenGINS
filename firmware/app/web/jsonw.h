@@ -30,6 +30,8 @@ void jw_end(jw_t *w, char close); /* '}' or ']' */
 
 void jw_str(jw_t *w, const char *key, const char *v);
 void jw_num(jw_t *w, const char *key, double v, int decimals);
+/* Shortest form (%g): for limits such as 1e-9 that fixed decimals would lose. */
+void jw_numg(jw_t *w, const char *key, double v);
 void jw_int(jw_t *w, const char *key, long long v);
 void jw_bool(jw_t *w, const char *key, bool v);
 void jw_null(jw_t *w, const char *key);

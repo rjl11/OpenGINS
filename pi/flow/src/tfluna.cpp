@@ -66,6 +66,41 @@ std::vector<uint8_t> cmd_dealias(bool dual)
 }
 
 std::vector<uint8_t> cmd_get_version() { return command(ID_GET_VERSION); }
+std::vector<uint8_t> cmd_save_settings() { return command(ID_SAVE_SETTINGS); }
+
+static uint16_t le16(const uint8_t* p) { return static_cast<uint16_t>(p[0] | (p[1] << 8)); }
+
+I2cData decode_i2c(const uint8_t (&r)[I2C_DATA_LEN], int64_t t_ns)
+{
+    I2cData d;
+    d.s.t_ns = t_ns;
+    d.s.range_m = static_cast<float>(le16(r + REG_DIST) * 0.01);
+    d.s.amp = le16(r + REG_AMP);
+    d.s.temp_c = static_cast<float>(static_cast<int16_t>(le16(r + REG_TEMP)) * 0.01);
+    d.s.status = classify(d.s.range_m, d.s.amp);
+    d.tick = le16(r + REG_TICK);
+    d.error = le16(r + REG_ERROR);
+    return d;
+}
+
+bool parse_gpio_spec(const std::string& spec, std::string& chip_path, unsigned& line)
+{
+    const size_t colon = spec.rfind(':');
+    if (colon == std::string::npos || colon == 0 || colon + 1 >= spec.size()) return false;
+    const std::string chip = spec.substr(0, colon), ln = spec.substr(colon + 1);
+    if (ln.find_first_not_of("0123456789") != std::string::npos || ln.size() > 3) return false;
+    line = static_cast<unsigned>(std::stoul(ln));
+    std::string n = chip;
+    for (const char* prefix : {"/dev/gpiochip", "gpiochip"}) {
+        if (n.rfind(prefix, 0) == 0) {
+            n = n.substr(std::string(prefix).size());
+            break;
+        }
+    }
+    if (n.empty() || n.size() > 3 || n.find_first_not_of("0123456789") != std::string::npos) return false;
+    chip_path = "/dev/gpiochip" + n;
+    return true;
+}
 
 void Parser::feed(const uint8_t* p, size_t n, int64_t t_last_ns, int64_t byte_ns, std::vector<Sample>& samples,
                   std::vector<Reply>& replies)

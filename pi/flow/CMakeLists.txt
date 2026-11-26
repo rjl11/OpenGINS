@@ -33,14 +33,15 @@ target_include_directories(flow_core PUBLIC src ${COMMON_DIR})
 target_link_libraries(flow_core PUBLIC ${OpenCV_LIBS})
 
 # TF-Luna lidar (src/tfluna.hpp): the protocol without OpenCV or OS calls,
-# then the serial reader for flow --lidar and the bench tool tfluna.
+# then the reader (serial port, or I2C with the data-ready GPIO in
+# src/i2c_gpio.hpp) for flow --lidar / --lidar-i2c and the bench tool tfluna.
 # The serial port (src/serial.hpp) is its own library: flow uses it for the
 # Pico link, tfluna_reader for the lidar.
 add_library(flow_serial STATIC src/serial.cpp)
 target_include_directories(flow_serial PUBLIC src)
 add_library(tfluna_core STATIC src/tfluna.cpp)
 target_include_directories(tfluna_core PUBLIC src)
-add_library(tfluna_reader STATIC src/tfluna_reader.cpp)
+add_library(tfluna_reader STATIC src/tfluna_reader.cpp src/i2c_gpio.cpp)
 target_link_libraries(tfluna_reader PUBLIC tfluna_core flow_serial Threads::Threads)
 add_executable(tfluna src/tfluna_main.cpp)
 target_link_libraries(tfluna PRIVATE tfluna_reader)

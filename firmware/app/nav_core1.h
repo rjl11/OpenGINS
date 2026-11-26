@@ -136,6 +136,7 @@ typedef struct {
     uint32_t update_us_mean; /* mean over the same interval                 */
     cpu_load_result_t load;  /* core 1 loop load over the last whole second (cpu_load.h) */
     uint32_t n_reinit;     /* filter (re)initialisations                    */
+    uint64_t t_reinit_us;  /* time_us_64() of the last one                  */
     uint64_t t_settled_us; /* when this run's startup counts were cleared, 0 = not yet */
 } nav_output_t;
 
@@ -198,8 +199,9 @@ void nav_start(nav_antenna_t mode, const nav_params_t *params);
 
 /* New filter settings: core 1 picks them up before its next sample and
  * re-initialises the filter (re-align, then navigate). Output pauses until
- * then; n_reinit counts it. A change to max_deadreckoning_s or
- * gnss_pos_decim alone is applied to the running filter instead. */
+ * then; n_reinit counts it. A change to max_deadreckoning_s,
+ * gnss_pos_decim or the pole aiding (pole_aid, tip_leverarm_m: the antenna
+ * height) alone is applied to the running filter instead. */
 void nav_set_params(const nav_params_t *params);
 
 /* Each returns false if the queue was full and the sample was dropped. */

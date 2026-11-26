@@ -10,11 +10,19 @@
 //   59 59 Dist_L Dist_H Amp_L Amp_H Temp_L Temp_H Sum
 // Command and reply: 5A Len ID payload... Sum, Len counting all bytes.
 // Sum is the low 8 bits of the sum of every byte before it.
+//
+// I2C mode (pin 5 at GND at power-on; section 6.3 and appendix III): a
+// register map at 7-bit address 0x10, up to 400 kHz. Distance in cm only,
+// temperature in 0.01 C. Pin 6 goes high when new data is in the registers
+// and low after any register read; the host must read on that edge, or a
+// read can overlap the update. The filter bitmap (ID 0x39) has no register:
+// it is set over UART and saved (ID 0x11) before the sensor goes to I2C.
 #pragma once
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace flow::tfluna {
@@ -26,8 +34,23 @@ constexpr uint8_t ID_SAMPLE_FREQ = 0x03;
 constexpr uint8_t ID_OUTPUT_FORMAT = 0x05;
 constexpr uint8_t ID_OUTPUT_EN = 0x07;
 constexpr uint8_t ID_DEALIAS_EN = 0x29;
+constexpr uint8_t ID_SAVE_SETTINGS = 0x11;
 constexpr uint8_t ID_FILTER_BIT_MAP = 0x39;
 constexpr uint8_t ID_GET_CONFIG = 0x3F;
+
+// I2C registers (appendix III), little-endian pairs.
+constexpr uint8_t I2C_ADDR_DEFAULT = 0x10;
+constexpr uint8_t REG_DIST = 0x00;     // cm
+constexpr uint8_t REG_AMP = 0x02;
+constexpr uint8_t REG_TEMP = 0x04;     // 0.01 C
+constexpr uint8_t REG_TICK = 0x06;     // the sensor's timestamp
+constexpr uint8_t REG_ERROR = 0x08;
+constexpr uint8_t REG_VERSION = 0x0A;  // revision, minor, major
+constexpr uint8_t REG_MODE = 0x23;     // 0 continuous, 1 trigger
+constexpr uint8_t REG_ENABLE = 0x25;   // 0 off, 1 on
+constexpr uint8_t REG_FPS = 0x26;
+constexpr uint8_t REG_SIGNATURE = 0x3C;  // "LUNA"
+constexpr size_t  I2C_DATA_LEN = 10;     // REG_DIST .. REG_ERROR + 1
 
 constexpr uint8_t FMT_9B_CM = 0x01;
 constexpr uint8_t FMT_9B_MM = 0x06;
@@ -55,6 +78,7 @@ std::vector<uint8_t> cmd_output_format(uint8_t fmt);
 std::vector<uint8_t> cmd_filter(uint8_t bitmap);    // bit 0 Kalman, bit 1 median
 std::vector<uint8_t> cmd_dealias(bool dual);        // true: dual frequency (default)
 std::vector<uint8_t> cmd_get_version();
+std::vector<uint8_t> cmd_save_settings();
 
 struct Sample {
     int64_t  t_ns = 0;     // estimated middle of the ranges averaged into it (CLOCK_MONOTONIC)
@@ -64,6 +88,18 @@ struct Sample {
     Status   status = Status::Ok;
     bool     ok() const { return status == Status::Ok; }
 };
+
+// The I2C data registers REG_DIST .. REG_ERROR as read in one go.
+struct I2cData {
+    Sample   s;          // t_ns as given
+    uint16_t tick = 0;   // the sensor's timestamp, changes with each new result
+    uint16_t error = 0;
+};
+I2cData decode_i2c(const uint8_t (&r)[I2C_DATA_LEN], int64_t t_ns);
+
+// "gpiochip2:11", "/dev/gpiochip2:11" or "2:11" to the chip's path and the
+// line offset; false when it isn't one of those.
+bool parse_gpio_spec(const std::string& spec, std::string& chip_path, unsigned& line);
 
 struct Reply {
     uint8_t              id = 0;

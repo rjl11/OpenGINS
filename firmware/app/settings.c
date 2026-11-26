@@ -206,39 +206,61 @@ static const char *eth_validate(const settings_t *s)
     return NULL;
 }
 
+#define RANGE(k, m, lo, hi, msg) { k, (uint16_t)offsetof(settings_t, m), lo, hi, msg }
+#define LEVER_MSG "lever arm: each axis must be within -10 .. 10 m"
+#define FLOW_LEVER_MSG "flow camera lever arm: each axis must be within -10 .. 10 m"
+#define FRONT_RPY_MSG "front unit TM171 mounting: each angle must be within -180 .. 360 deg"
+#define FRONT_LEVER_MSG "front unit TM171 position: each axis must be within -20 .. 20 m"
+const settings_range_t settings_ranges[] = {
+    RANGE("lever_x", leverarm_m[0], -10.0f, 10.0f, LEVER_MSG),
+    RANGE("lever_y", leverarm_m[1], -10.0f, 10.0f, LEVER_MSG),
+    RANGE("lever_z", leverarm_m[2], -10.0f, 10.0f, LEVER_MSG),
+    RANGE("acc_psd", acc_psd, 1e-9f, 1e-1f, "acc_psd: must be within 1e-9 .. 1e-1 (m/s^2)^2/Hz"),
+    RANGE("gyr_psd", gyr_psd, 1e-12f, 1e-3f, "gyr_psd: must be within 1e-12 .. 1e-3 (rad/s)^2/Hz"),
+    RANGE("gyr_bias_rw", gyr_bias_rw, 1e-9f, 1e-2f, "gyr_bias_rw: must be within 1e-9 .. 1e-2 rad/s/sqrt(s)"),
+    RANGE("acc_bias_rw", acc_bias_rw, 1e-7f, 1e-1f, "acc_bias_rw: must be within 1e-7 .. 1e-1 m/s^2/sqrt(s)"),
+    RANGE("automotive_min_speed", automotive_min_speed, 0.0f, 20.0f,
+          "automotive_min_speed: must be within 0 .. 20 m/s"),
+    RANGE("max_deadreckoning_s", max_deadreckoning_s, 0.0f, 3600.0f,
+          "max_deadreckoning_s: must be within 0 .. 3600 s (0 = INSLIB default, 10 s)"),
+    RANGE("ant_height_m", ant_height_m, 0.0f, 10.0f,
+          "antenna height over ground: must be within 0 .. 10 m (0 = antenna position)"),
+    RANGE("baseline_yaw_deg", baseline_yaw_deg, -180.0f, 360.0f, "baseline_yaw_deg: must be within -180 .. 360"),
+    RANGE("baseline_gate_m", baseline_gate_m, 0.001f, 1.0f, "baseline_gate_m: must be within 0.001 .. 1 m"),
+    RANGE("flow_height_m", flow_height_m, 0.1f, 10.0f, "flow camera height: must be within 0.1 .. 10 m"),
+    RANGE("flow_cam_yaw_deg", flow_cam_yaw_deg, -180.0f, 360.0f, "flow camera yaw: must be within -180 .. 360"),
+    RANGE("flow_lever_x", flow_leverarm_m[0], -10.0f, 10.0f, FLOW_LEVER_MSG),
+    RANGE("flow_lever_y", flow_leverarm_m[1], -10.0f, 10.0f, FLOW_LEVER_MSG),
+    RANGE("flow_lever_z", flow_leverarm_m[2], -10.0f, 10.0f, FLOW_LEVER_MSG),
+    RANGE("offset_interval_s", offset_interval_s, 0.0f, 600.0f,
+          "offset fusion interval: must be within 0 .. 600 s (0 = INSLIB default, 10 s)"),
+    RANGE("offset_inflation", offset_inflation, 0.0f, 10.0f,
+          "offset sigma inflation: must be within 0 .. 10 (0 = INSLIB default, 3)"),
+    RANGE("offset_rw_mps", offset_rw_mps, 0.0f, 10.0f,
+          "offset random walk: must be within 0 .. 10 m/sqrt(s) (0 = INSLIB default, 0.3)"),
+    RANGE("offset_baro_sd_m", offset_baro_sd_m, 0.0f, 10.0f,
+          "offset barometer sigma: must be within 0 .. 10 m (0 = INSLIB default, 2 m)"),
+    RANGE("gnss_pos_decim", gnss_pos_decim, 0.0f, 100.0f,
+          "GNSS position decimation: a whole number 0 .. 100 (0 = INSLIB default, 1)"),
+    RANGE("front_imu_roll_deg", front_imu_rpy_deg[0], -180.0f, 360.0f, FRONT_RPY_MSG),
+    RANGE("front_imu_pitch_deg", front_imu_rpy_deg[1], -180.0f, 360.0f, FRONT_RPY_MSG),
+    RANGE("front_imu_yaw_deg", front_imu_rpy_deg[2], -180.0f, 360.0f, FRONT_RPY_MSG),
+    RANGE("front_imu_lever_x", front_imu_lever_m[0], -20.0f, 20.0f, FRONT_LEVER_MSG),
+    RANGE("front_imu_lever_y", front_imu_lever_m[1], -20.0f, 20.0f, FRONT_LEVER_MSG),
+    RANGE("front_imu_lever_z", front_imu_lever_m[2], -20.0f, 20.0f, FRONT_LEVER_MSG),
+    RANGE("cab_roll_centre_m", cab_roll_centre_m, 0.0f, 10.0f, "cab roll centre: must be within 0 .. 10 m (0 = off)"),
+};
+const unsigned settings_n_ranges = sizeof settings_ranges / sizeof settings_ranges[0];
+
 const char *settings_validate(const settings_t *s)
 {
-    for (int i = 0; i < 3; i++) {
-        if (!in_range(s->leverarm_m[i], -10.0f, 10.0f)) {
-            return "lever arm: each axis must be within -10 .. 10 m";
+    for (unsigned i = 0; i < settings_n_ranges; i++) {
+        const settings_range_t *r = &settings_ranges[i];
+        float v;
+        memcpy(&v, (const char *)s + r->offset, sizeof v);
+        if (!in_range(v, r->lo, r->hi)) {
+            return r->msg;
         }
-    }
-    if (!in_range(s->acc_psd, 1e-9f, 1e-1f)) {
-        return "acc_psd: must be within 1e-9 .. 1e-1 (m/s^2)^2/Hz";
-    }
-    if (!in_range(s->gyr_psd, 1e-12f, 1e-3f)) {
-        return "gyr_psd: must be within 1e-12 .. 1e-3 (rad/s)^2/Hz";
-    }
-    if (!in_range(s->gyr_bias_rw, 1e-9f, 1e-2f)) {
-        return "gyr_bias_rw: must be within 1e-9 .. 1e-2 rad/s/sqrt(s)";
-    }
-    if (!in_range(s->acc_bias_rw, 1e-7f, 1e-1f)) {
-        return "acc_bias_rw: must be within 1e-7 .. 1e-1 m/s^2/sqrt(s)";
-    }
-    if (!in_range(s->automotive_min_speed, 0.0f, 20.0f)) {
-        return "automotive_min_speed: must be within 0 .. 20 m/s";
-    }
-    if (!in_range(s->max_deadreckoning_s, 0.0f, 3600.0f)) {
-        return "max_deadreckoning_s: must be within 0 .. 3600 s (0 = INSLIB default, 10 s)";
-    }
-    if (!in_range(s->ant_height_m, 0.0f, 10.0f)) {
-        return "antenna height over ground: must be within 0 .. 10 m (0 = antenna position)";
-    }
-    if (!in_range(s->baseline_yaw_deg, -180.0f, 360.0f)) {
-        return "baseline_yaw_deg: must be within -180 .. 360";
-    }
-    if (!in_range(s->baseline_gate_m, 0.001f, 1.0f)) {
-        return "baseline_gate_m: must be within 0.001 .. 1 m";
     }
     if (s->antenna_dual > 1) {
         return "antenna: must be single or dual";
@@ -246,51 +268,17 @@ const char *settings_validate(const settings_t *s)
     if (s->platform_p1 > APP_PLATFORM_FIXED_WING + 1) {
         return "platform: tractor, pole, multirotor or fixed_wing";
     }
-    if (!in_range(s->flow_height_m, 0.1f, 10.0f)) {
-        return "flow camera height: must be within 0.1 .. 10 m";
-    }
-    if (!in_range(s->flow_cam_yaw_deg, -180.0f, 360.0f)) {
-        return "flow camera yaw: must be within -180 .. 360";
-    }
-    for (int i = 0; i < 3; i++) {
-        if (!in_range(s->flow_leverarm_m[i], -10.0f, 10.0f)) {
-            return "flow camera lever arm: each axis must be within -10 .. 10 m";
-        }
-    }
     if (s->sensor_baro > 1 || s->sensor_mag > 1 || s->sensor_flow > 1 || s->sensor_wheel > 1) {
         return "sensors: each must be on or off";
     }
-    if (!in_range(s->offset_interval_s, 0.0f, 600.0f)) {
-        return "offset fusion interval: must be within 0 .. 600 s (0 = INSLIB default, 10 s)";
-    }
-    if (!in_range(s->offset_inflation, 0.0f, 10.0f)) {
-        return "offset sigma inflation: must be within 0 .. 10 (0 = INSLIB default, 3)";
-    }
-    if (!in_range(s->offset_rw_mps, 0.0f, 10.0f)) {
-        return "offset random walk: must be within 0 .. 10 m/sqrt(s) (0 = INSLIB default, 0.3)";
-    }
-    if (!in_range(s->offset_baro_sd_m, 0.0f, 10.0f)) {
-        return "offset barometer sigma: must be within 0 .. 10 m (0 = INSLIB default, 2 m)";
-    }
-    if (!in_range(s->gnss_pos_decim, 0.0f, 100.0f) || s->gnss_pos_decim != (float)(int)s->gnss_pos_decim) {
+    if (s->gnss_pos_decim != (float)(int)s->gnss_pos_decim) {
         return "GNSS position decimation: a whole number 0 .. 100 (0 = INSLIB default, 1)";
     }
     if (rtcm_src_mode_name(s->rtcm_src) == NULL) {
         return "correction source: auto, ethernet or bluetooth";
     }
-    for (int i = 0; i < 3; i++) {
-        if (!in_range(s->front_imu_rpy_deg[i], -180.0f, 360.0f)) {
-            return "front unit TM171 mounting: each angle must be within -180 .. 360 deg";
-        }
-        if (!in_range(s->front_imu_lever_m[i], -20.0f, 20.0f)) {
-            return "front unit TM171 position: each axis must be within -20 .. 20 m";
-        }
-    }
     if (s->front_imu_backup > 1) {
         return "front unit TM171 backup: on or off";
-    }
-    if (!in_range(s->cab_roll_centre_m, 0.0f, 10.0f)) {
-        return "cab roll centre: must be within 0 .. 10 m (0 = off)";
     }
     const char *eth = eth_validate(s);
     if (eth != NULL) {

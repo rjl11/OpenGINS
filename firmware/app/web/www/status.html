@@ -4,85 +4,127 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>OpenGINS details</title>
+<link rel="stylesheet" href="/common.css">
 <style>
-:root{--bg:#f5f6f8;--card:#fff;--fg:#1c1f24;--dim:#6b7280;--line:#e3e6ea;--ok:#15803d;--bad:#b91c1c}
-@media (prefers-color-scheme:dark){:root{--bg:#111316;--card:#1b1e23;--fg:#e6e8eb;--dim:#9aa1ab;--line:#2b2f36;--ok:#4ade80;--bad:#f87171}}
-*{box-sizing:border-box}
-body{margin:0;padding:16px;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,sans-serif}
-header{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:baseline;margin-bottom:12px}
-h1{font-size:18px;margin:0}
 #age{color:var(--dim)}
 #age.bad{color:var(--bad);font-weight:600}
-main{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
-section{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
-h2{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);margin:0 0 6px}
-table{width:100%;border-collapse:collapse}
-td{padding:2px 0;vertical-align:top;border-top:1px solid var(--line)}
-tr:first-child td{border-top:0}
-td:first-child{color:var(--dim);width:40%;padding-right:8px}
-td:last-child{font-variant-numeric:tabular-nums;word-break:break-word}
+.tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin:0 0 12px}
+.tools .note{flex:1;min-width:180px}
 .bad{color:var(--bad);font-weight:600}
+.warn{color:var(--warn);font-weight:600}
 .ok{color:var(--ok)}
+button.on{background:var(--warnb);border-color:var(--warn);color:var(--warn)}
 </style>
 </head>
 <body>
-<header><h1>OpenGINS</h1><a href="/" style="color:inherit">phone view</a><a href="/config.html" style="color:inherit">config</a><a href="/calib.html" style="color:inherit">calibration</a><span id="age">connecting…</span></header>
-<main id="main"></main>
+<header><h1>OpenGINS</h1><span id="top" class="note"></span><span id="age">connecting…</span></header>
+<nav class="tabs"><a href="/">Status</a><a href="/status.html" aria-current="page">Details</a><a href="/config.html">Config</a><a href="/calib.html">Calibration</a></nav>
+<div class="tools">
+<button type="button" id="pause">Pause</button>
+<button type="button" id="dl">Download JSON</button>
+<span id="size" class="note"></span>
+</div>
+<main id="main" class="cards"></main>
+<script src="/common.js"></script>
 <script>
 "use strict";
-const TITLES={wifi:"Wi-Fi",eth:"Ethernet (W5500)",corrections:"Corrections (RTCM)",imu:"IMU (TM210)",gnss:"GNSS",heading:"GNSS heading",baro:"Barometer (BMP581)",cpu:"CPU load",nav:"Filter (INSLIB)",mag:"Magnetometer (AHRS)",calib:"IMU calibration",rx_overflows:"UART ring overflows"};
-let last=0;
-function fmt(v){
+/* Every object in /status.json becomes a card, in this order, the unknown
+ * ones after; its scalars are rows, nested objects indented rows. */
+const ORDER=["gnss","heading","nav","position","imu","mag","baro","corrections","eth","flow","speed","pole","calib","wifi","cpu","usb_log","rx_overflows"];
+const TITLES={wifi:"Wi-Fi",eth:"Ethernet (W5500)",corrections:"Corrections (RTCM)",imu:"IMU (TM210)",gnss:"GNSS",heading:"GNSS heading",baro:"Barometer (BMP581)",cpu:"CPU load",nav:"Filter (INSLIB)",mag:"Magnetometer (AHRS)",calib:"IMU calibration",rx_overflows:"UART ring overflows",position:"Position (outputs)",flow:"Optical flow",speed:"Wheel speed",pole:"Survey pole",usb_log:"USB log"};
+/* Unit from the key's suffix, longest first; the suffix leaves the label. */
+const UNITS=[["_mps2"," m/s²"],["_dbm"," dBm"],["_mps"," m/s"],["_rps"," rad/s"],["_deg","°"],["_pct"," %"],["_hz"," Hz"],["_ms"," ms"],["_us"," µs"],["_ns"," ns"],["_ut"," µT"],["_pa"," Pa"],["_m"," m"],["_s"," s"],["_c"," °C"],["_b"," B"]];
+/* The unit's limit for one JSON document (WEB_DOC_MAX in web.h): a longer
+ * one is replaced by an error, so growth must be seen before it gets there. */
+const DOC_MAX=4096;
+let last=0,paused=false,shown=null;
+function unitOf(k){for(const [s,u] of UNITS)if(k.endsWith(s))return[k.slice(0,-s.length),u];return[k,""];}
+function num(v){return Number.isInteger(v)?String(v):String(+v.toPrecision(6));}
+function fmt(v,u){
   if(v===null||v===undefined)return"—";
-  if(Array.isArray(v))return v.map(fmt).join("  ");
-  if(typeof v==="object")return Object.entries(v).map(([k,x])=>k+" "+fmt(x)).join(", ");
   if(typeof v==="boolean")return v?"yes":"no";
+  if(typeof v==="number")return u===" Pa"&&Math.abs(v)>=1000?(v/100).toFixed(2)+" hPa":num(v)+u;
+  if(Array.isArray(v))return v.every(x=>typeof x==="number")?v.map(num).join("  ")+u:v.map(x=>fmt(x,"")).join(", ");
   return String(v);
 }
 function cls(k,v){
   if(k==="error")return v&&v!=="ok"?"bad":"";
-  if(k==="dual_refused")return v?"bad":"";
-  if(k==="state")return /error|fail/.test(v)?"bad":(v==="run"||v==="running"||v==="up"?"ok":"");
+  if(k==="dual_refused"||k==="imu_lost")return v?"bad":"";
+  if(k==="state")return /error|fail|not_found/.test(v)?"bad":(/^(run|running|up|held)$/.test(v)?"ok":"");
   return"";
 }
+function dur(s){const h=Math.floor(s/3600),m=Math.floor(s/60)%60;return h?h+" h "+m+" min":m?m+" min "+s%60+" s":s+" s";}
+/* Rows of one card: [path, label, text, class, depth]. A nested object gets
+ * a heading row, its entries indented under it. */
+function rows(obj,prefix,out,depth){
+  depth=depth||0;
+  for(const [k,v] of Object.entries(obj)){
+    if(v!==null&&typeof v==="object"&&!Array.isArray(v)){
+      out.push([prefix+k+"/",k.replace(/_/g," "),"","",depth]);
+      rows(v,prefix+k+"/",out,depth+1);
+      continue;
+    }
+    const [name,u]=unitOf(k);
+    out.push([prefix+k,name.replace(/_/g," "),fmt(v,u),cls(k,v),depth]);
+  }
+  return out;
+}
+/* Cells are rewritten in place, and only when their text changes, so text
+ * can be selected and copied while the page updates. A card is rebuilt only
+ * when its set of rows changes. */
+const cards=new Map();
 function render(d){
   const m=document.getElementById("main");
-  m.textContent="";
-  for(const [sec,obj] of Object.entries(d)){
-    if(obj===null||typeof obj!=="object"||Array.isArray(obj))continue;
-    const s=document.createElement("section");
-    const h=document.createElement("h2");
-    h.textContent=TITLES[sec]||sec;
-    s.appendChild(h);
-    const t=document.createElement("table");
-    for(const [k,v] of Object.entries(obj)){
-      const r=t.insertRow();
-      r.insertCell().textContent=k.replace(/_/g," ");
-      const c=r.insertCell();
-      c.textContent=fmt(v);
-      const x=cls(k,v);
-      if(x)c.className=x;
+  const keys=Object.keys(d).filter(k=>d[k]!==null&&typeof d[k]==="object"&&!Array.isArray(d[k]));
+  keys.sort((a,b)=>{const x=ORDER.indexOf(a),y=ORDER.indexOf(b);return(x<0?99:x)-(y<0?99:y);});
+  for(const [k,c] of cards)if(!keys.includes(k)){c.sec.remove();cards.delete(k);}
+  keys.forEach((k,idx)=>{
+    const r=rows(d[k],"",[]),sig=r.map(x=>x[0]).join("|");
+    let c=cards.get(k);
+    if(!c||c.sig!==sig){
+      const sec=document.createElement("section"),h=document.createElement("h2"),t=document.createElement("table");
+      h.textContent=TITLES[k]||k.replace(/_/g," ");
+      sec.append(h,t);
+      const cells=r.map(([,label,,,depth])=>{const tr=t.insertRow(),a=tr.insertCell();a.textContent=label;if(depth)a.style.paddingLeft=12*depth+"px";return tr.insertCell();});
+      if(c)c.sec.replaceWith(sec);
+      c={sec,sig,cells};cards.set(k,c);
     }
-    s.appendChild(t);
-    m.appendChild(s);
-  }
-  const top=[];
-  if(d.fw)top.push(d.fw);
-  if(d.uptime_s!==undefined)top.push("up "+d.uptime_s+" s");
-  document.querySelector("h1").textContent="OpenGINS"+(top.length?" · "+top.join(" · "):"");
+    /* Moved only when out of place: moving a node drops a selection in it. */
+    if(m.children[idx]!==c.sec)m.insertBefore(c.sec,m.children[idx]||null);
+    r.forEach(([,,text,cl],i)=>{const td=c.cells[i];if(td.textContent!==text)td.textContent=text;if(td.className!==cl)td.className=cl;});
+  });
+  const top=[d.fw&&d.fw+(d.fw_date?" ("+d.fw_date+")":""),d.platform,typeof d.uptime_s==="number"?"up "+dur(d.uptime_s):null,d.reset&&"last reset: "+d.reset].filter(Boolean);
+  document.getElementById("top").textContent=top.join(" · ");
+  const b=d.$bytes,s=document.getElementById("size");
+  if(b){s.textContent="status.json "+(b/1024).toFixed(1)+" of "+(DOC_MAX/1024).toFixed(0)+" KB";s.className="note"+(b>0.9*DOC_MAX?" bad":b>0.8*DOC_MAX?" warn":"");}
 }
-async function poll(){
-  try{
-    const r=await fetch("/status.json",{cache:"no-store"});
-    if(r.ok){render(await r.json());last=Date.now();}
-  }catch(e){}
+function age(){
   const a=document.getElementById("age");
   const s=last?(Date.now()-last)/1000:Infinity;
-  a.textContent=last?(s<2.5?"live":"no update for "+Math.round(s)+" s"):"connecting…";
-  a.className=s<2.5?"":"bad";
-  setTimeout(poll,1000);
+  a.textContent=paused?"paused":last?(s<2.5?"live":"no update for "+Math.round(s)+" s"):"connecting…";
+  a.className=paused||s<2.5?"":"bad";
 }
-poll();
+OG.poll(async()=>{if(paused)return;const d=await OG.getJson("/status.json");last=Date.now();shown=d;render(d);age();},1000);
+setInterval(age,500);
+const pb=document.getElementById("pause");
+pb.addEventListener("click",()=>{paused=!paused;pb.textContent=paused?"Resume":"Pause";pb.classList.toggle("on",paused);if(!paused)last=0;age();});
+/* One file with all three documents, for bench and field reports. While
+ * paused, the status is the one on screen. */
+document.getElementById("dl").addEventListener("click",async()=>{
+  const b=document.getElementById("dl");
+  b.disabled=true;b.textContent="Reading…";
+  const snap={saved:new Date().toISOString(),page:location.href};
+  try{snap.status=paused&&shown?shown:await OG.getJson("/status.json");}catch(e){snap.status_error=e.message;}
+  for(const k of ["config","calib"]){try{snap[k]=await OG.getJson("/"+k+".json");}catch(e){snap[k+"_error"]=e.message;}}
+  snap.bytes={};
+  for(const k of ["status","config","calib"])if(snap[k]&&snap[k].$bytes)snap.bytes[k]=snap[k].$bytes;
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([JSON.stringify(snap,null,1)],{type:"application/json"}));
+  a.download="opengins-"+snap.saved.replace(/[-:]/g,"").replace("T","-").slice(0,15)+".json";
+  document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),10000);
+  b.disabled=false;b.textContent="Download JSON";
+});
 </script>
 </body>
 </html>

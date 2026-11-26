@@ -170,6 +170,17 @@ static void test_detector(void)
     pole_aid_reset(&p, &cfg, false, k_tip_b, k_ant_b);
     fr = run_detector(&p, &sway, 0.0, 3.0, true);
     CHECK(fr == 0.0, "inactive: planted %.3f", fr);
+
+    /* A new antenna height while planted ends the episode (the latched tip
+     * was taken with the old lever arm); the same geometry again keeps it. */
+    pole_aid_reset(&p, &cfg, true, k_tip_b, k_ant_b);
+    run_detector(&p, &sway, 0.0, 3.0, true);
+    CHECK(p.st.planted, "planted before the geometry change");
+    pole_aid_set_geometry(&p, true, k_tip_b, k_ant_b);
+    CHECK(p.st.planted, "same geometry: still planted");
+    const float longer[3] = { k_tip_b[0], k_tip_b[1], k_tip_b[2] + 0.1f };
+    pole_aid_set_geometry(&p, true, longer, k_ant_b);
+    CHECK(!p.st.planted && !p.st.latched, "new tip: planted %d latched %d", p.st.planted, p.st.latched);
 }
 
 /* Small deterministic noise, roughly uniform in [-a, a]. */

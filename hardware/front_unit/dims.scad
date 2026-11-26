@@ -27,6 +27,11 @@ cam_lens_drop  = 25.0;
 cam_back_h     = 4.0 - cam_pcb_t;
 cam_fpc_w      = 16.0;
 cam_fov_half   = 74;     // 148 deg diagonal FoV
+cam_focus_d    = 22.0;   // floor hole round the lens: room for fingers to turn it (user, 2026-11-26)
+cam_corner_t   = 1.6;    // locating corners round the PCB: wall, legs, height above the PCB underside
+cam_corner_leg = 5.0;
+cam_corner_h   = 1.5;
+tfl_cable_gap  = 6.5;    // camera PCB edge to TF-Luna body: its cable leaves on that side (user, 2026-11-26: 5 mm more)
 
 // ---------------------------------------------------------------- TM171
 // docs/datasheets/TransducerM_TM151_TM171_Datasheet_EN_V116-R.pdf, p.7,
@@ -111,6 +116,12 @@ tap_m5   = 4.2;   // M5: bracket
 tap_m3_depth = 9;    // lid screws M3 x 10 (3 mm lid + 7 in the post)
 tap_m5_depth = 12;   // bracket screws, up to 10 mm into the wall
 clear_m3 = 3.4;
+// Camera, TM171 and TF-Luna: "stake" = printed pins through their M2 holes
+// (Ø2.1-2.2), tops melted over with a soldering iron (user, 2026-11-26: no
+// M2 screws); "screw" = M2 pilot holes instead.
+m2_fix    = "stake";
+stake_d   = 1.8;   // pin, 0.3-0.4 mm under the holes
+stake_len = 2.0;   // pin above the part, melted into a head
 slot_m6  = 6.6;
 
 fpc_len  = 150;   // camera FPC

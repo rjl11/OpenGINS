@@ -1,5 +1,5 @@
 // Front unit housing: OV9281 camera, ROCK 4SE, TM171, TF-Luna.
-// Bench / field-test version: vented, open lens aperture, no fan.
+// Bench / field-test version: vented lid, open lens aperture, no fan.
 //
 //   openscad -o stl/base.stl -D 'part="base"' front_unit.scad
 //
@@ -31,13 +31,13 @@ tmp_h    = 3;                         // platform above the floor
 tm_c     = [tmp_x0 + tmp_l / 2, comp_y];
 
 // Camera next to it
-cam_x    = tmp_x0 + tmp_l + 2 + cam_pcb / 2;   // bosses 1 mm clear of the platform
+cam_x    = tmp_x0 + tmp_l + 3 + cam_pcb / 2;   // locating corners 1 mm clear of the platform
 cam_c    = [cam_x, comp_y];
 lens_z   = 0.5;                       // lens front above the floor's underside
 cam_pcb_z = lens_z + cam_lens_drop;   // PCB underside
 
 // TF-Luna next to the camera, long side along y
-tfl_x0   = cam_x + cam_pcb / 2 + 1.5; // body edge on the camera side
+tfl_x0   = cam_x + cam_pcb / 2 + tfl_cable_gap; // body edge on the camera side
 tfl_c    = [tfl_x0 + tfl_w / 2, comp_y];
 tfl_pad  = 3;                         // pad under it, holds the screws
 tfl_lens_x = tfl_x0 + tfl_lens_off;
@@ -79,7 +79,7 @@ echo(str("box outside ", inner_x + 2 * wall, " x ", inner_y + 2 * wall, " x ",
          wall_h + lid_t, " mm"));
 echo(str("camera axis to TF-Luna emitter/receiver: ", cam_tfl_offset, " mm in x, +-",
          tfl_lens_pitch / 2, " mm in y"));
-assert(cam_lens_d / 2 + 0.4 + lens_z * tan(77) < tfl_lens_x - cam_x - tfl_lens_d / 2 - 2,
+assert(cam_focus_d / 2 + lens_z * tan(77) < tfl_lens_x - cam_x - tfl_lens_d / 2 - 2,
        "TF-Luna opening runs into the camera aperture");
 
 // ================================================================ helpers
@@ -96,7 +96,21 @@ module tap_hole(d, depth) { translate([0, 0, -depth]) cylinder(d = d, h = depth 
 module slot(len, d) { hull() for (s = [-1, 1]) translate([s * len / 2, 0]) circle(d = d); }
 
 // ================================================================ base
+// Pins for the M2 holes: stand on z = 0, through a part `t` thick.
+module stake(t) { cylinder(d = stake_d, h = t + stake_len, $fn = 24); }
+
+// Where each M2 fixing sits: [x, y, z of the part's underside, part thickness].
+function m2_points() = concat(
+    [for (sx = [-1, 1], sy = [-1, 1])
+        [cam_x + sx * cam_hole_pitch / 2, comp_y + sy * cam_hole_pitch / 2, cam_pcb_z, cam_pcb_t]],
+    [for (sx = [-1, 1], sy = [-1, 1])
+        [tm_c[0] + tm_hole_off + sx * tm_hole_dx / 2, comp_y + sy * tm_hole_dy / 2, floor_t + tmp_h, tm_base_t]],
+    [for (s = [-1, 1])
+        [tfl_x0 + tfl_ear_off, comp_y + s * tfl_hole_pitch / 2, floor_t + tfl_pad + tfl_ear_z, tfl_ear_t]]);
+
 module base() {
+    if (m2_fix == "stake")
+        for (p = m2_points()) translate([p[0], p[1], p[2] - eps]) stake(p[3] + eps);
     difference() {
         union() {
             difference() {
@@ -120,6 +134,13 @@ module base() {
                 translate([cam_x - cam_hole_pitch / 2, comp_y + sy * cam_hole_pitch / 2 - 0.8, floor_t - eps])
                     cube([cam_hole_pitch, 1.6, cam_pcb_z - floor_t - 2]);
             }
+            // locating corners: an L outside each PCB corner, 0.3 mm clear, from the floor
+            for (sx = [-1, 1], sy = [-1, 1]) translate([cam_x, comp_y, floor_t - eps]) scale([sx, sy, 1]) {
+                h = cam_pcb / 2 + 0.3;
+                hz = cam_pcb_z + cam_corner_h - floor_t + eps;
+                translate([h, h - cam_corner_leg, 0]) cube([cam_corner_t, cam_corner_leg + cam_corner_t, hz]);
+                translate([h - cam_corner_leg, h, 0]) cube([cam_corner_leg + cam_corner_t, cam_corner_t, hz]);
+            }
             // TF-Luna pad
             translate([tfl_x0 - 1, comp_y - tfl_l / 2 - 1, floor_t - eps])
                 cube([tfl_w + 2, tfl_l + 2, tfl_pad + eps]);
@@ -136,24 +157,19 @@ module base() {
         }
 
         // camera aperture: barrel hole, then a cone wider than the FoV
-        translate([cam_x, comp_y, -1]) cylinder(d = cam_lens_d + 0.8, h = floor_t + 2);
+        translate([cam_x, comp_y, -1]) cylinder(d = cam_focus_d, h = floor_t + 2);
         translate([cam_x, comp_y, -eps]) {
-            r0 = cam_lens_d / 2 + 0.4;
+            r0 = cam_focus_d / 2;
             cylinder(r1 = r0 + (lens_z + eps) * tan(77), r2 = r0, h = lens_z + 2 * eps);
         }
-        // TF-Luna: emitter and receiver openings, ear screws
-        for (s = [-1, 1]) {
+        // TF-Luna: emitter and receiver openings
+        for (s = [-1, 1])
             translate([tfl_lens_x, comp_y + s * tfl_lens_pitch / 2, -1]) cylinder(d = tfl_lens_d + 1, h = floor_t + tfl_pad + 2);
-            translate([tfl_x0 + tfl_ear_off, comp_y + s * tfl_hole_pitch / 2, floor_t + tfl_pad + tfl_ear_z - 7])
-                cylinder(d = tap_m2, h = 8);
-        }
-        // camera screws
-        for (sx = [-1, 1], sy = [-1, 1])
-            translate([cam_x + sx * cam_hole_pitch / 2, comp_y + sy * cam_hole_pitch / 2, cam_pcb_z - 7]) cylinder(d = tap_m2, h = 8);
-        // TM171 screws and the pin row relief
-        for (sx = [-1, 1], sy = [-1, 1])
-            translate([tm_c[0] + tm_hole_off + sx * tm_hole_dx / 2, comp_y + sy * tm_hole_dy / 2, floor_t + tmp_h - 5.5])
-                cylinder(d = tap_m2, h = 6);
+        // M2 pilot holes for the camera, TM171 and TF-Luna (with m2_fix = "screw"),
+        // 6 mm deep, or 5.5 into the TM171 platform
+        if (m2_fix == "screw")
+            for (p = m2_points()) translate([p[0], p[1], p[2]]) tap_hole(tap_m2, p[2] == floor_t + tmp_h ? 5.5 : 6);
+        // TM171 pin row relief
         translate([tm_c[0] + tm_l / 2 - tm_pin_in - 2.5, comp_y - 8, floor_t]) cube([5, 16, tmp_h + 1]);
         // ROCK 4SE screws
         for (h = rk_holes) translate([h[0], h[1], rk_z - 8]) cylinder(d = tap_m25, h = 9);
@@ -168,16 +184,7 @@ module base() {
         translate([rk_x0 + mid(rk_audio[0]), 0, rk_top + rk_audio[2] / 2]) port([rk_audio[0][1] - rk_audio[0][0] + 2, rk_audio[2] + 2]);
         // RJ45 / USB window on the x = inner_x wall
         translate([inner_x - 1, rk_y0 + 1, rk_top - 1]) cube([wall + 2, rk_w - 2, max(rk_usb_h, rk_rj45[2]) + 1.8]);
-        // vents: low on the port side, under the board on the header side
-        for (x = [12 : 6 : inner_x - 10])
-            if (abs(x + 1.5 - inner_x / 2) > 16)    // not through the ear ribs
-                translate([x, -wall - 1, 8]) cube([3, wall + 2, 14]);
-        for (x = [12 : 6 : inner_x - 10])
-            if (min([for (m = m5_x) abs(x + 1.5 - m)]) > 9 && abs(x + 1.5 - inner_x / 2) > 16)
-                translate([x, inner_y - 1, 8]) cube([3, wall + 2, 14]);
-        for (x = [12 : 6 : inner_x - 10])
-            if (min([for (m = m5_x) abs(x + 1.5 - m)]) > 9)
-                translate([x, inner_y - 1, rk_z - 9]) cube([3, wall + 2, 7]);
+        // no vents in the base walls (user, 2026-11-26): all in the lid
         // TM171 x axis, engraved on the header-side wall
         // rotate([90, 0, 180]) maps the text's +x to world -x (readable from
         // outside) and its extrusion to +y; the arrow points to world +x.
@@ -225,10 +232,8 @@ module lid() {
             }
         }
         for (c = corners) translate([c[0], c[1], -5]) cylinder(d = clear_m3, h = 20);
-        // vent slots over the board (no fan)
-        for (x = [16 : 6 : inner_x - 30]) translate([x, 12, -1]) cube([3, inner_y - 24, lid_t + 2]);
-        // exhaust slots over the RJ45 end
-        for (y = [8 : 6 : inner_y - 10]) translate([inner_x - 24, y, -1]) cube([16, 3, lid_t + 2]);
+        // vent slots, all along y, over the whole board (no fan)
+        for (x = [10 : 6 : inner_x - 10]) translate([x, 12, -1]) cube([3, inner_y - 24, lid_t + 2]);
     }
 }
 
@@ -252,7 +257,11 @@ module tap_test() {
 // ================================================================ dummy parts
 module cam() {
     translate([cam_x, comp_y, 0]) {
-        translate([-cam_pcb / 2, -cam_pcb / 2, cam_pcb_z]) cube([cam_pcb, cam_pcb, cam_pcb_t]);
+        difference() {
+            translate([-cam_pcb / 2, -cam_pcb / 2, cam_pcb_z]) cube([cam_pcb, cam_pcb, cam_pcb_t]);
+            for (sx = [-1, 1], sy = [-1, 1]) translate([sx * cam_hole_pitch / 2, sy * cam_hole_pitch / 2, cam_pcb_z - 1])
+                cylinder(d = 2.2, h = 4);
+        }
         translate([-cam_holder / 2, -cam_holder / 2, cam_pcb_z - 10]) cube([cam_holder, cam_holder, 10]);
         translate([-2.5, -cam_holder_ear / 2, cam_pcb_z - 3]) cube([5, cam_holder_ear, 3]);
         translate([0, 0, lens_z]) cylinder(d = cam_lens_d, h = cam_pcb_z - 10 - lens_z);
@@ -262,7 +271,11 @@ module cam() {
 
 module tm171() {
     translate([tm_c[0], comp_y, floor_t + tmp_h]) {
-        translate([-tm_l / 2, -tm_w / 2, 0]) cube([tm_l, tm_w, tm_base_t]);
+        difference() {
+            translate([-tm_l / 2, -tm_w / 2, 0]) cube([tm_l, tm_w, tm_base_t]);
+            for (sx = [-1, 1], sy = [-1, 1]) translate([tm_hole_off + sx * tm_hole_dx / 2, sy * tm_hole_dy / 2, -1])
+                cylinder(d = 2.1, h = 4);
+        }
         translate([tm_case_off - tm_case_l / 2, -tm_case_w / 2, 0]) cube([tm_case_l, tm_case_w, tm_h]);
         translate([-tm_l / 2, -tm_usb_y[1], tm_base_t]) cube([7, tm_usb_y[1] - tm_usb_y[0], 3.2]);  // USB-C
         for (i = [-2 : 2]) translate([tm_l / 2 - tm_pin_in, i * 2.54, -2.5])                        // header pins
@@ -274,9 +287,12 @@ module tm171() {
 module tfluna() {
     z = floor_t + tfl_pad;
     translate([tfl_x0, comp_y - tfl_body_l / 2, z]) cube([tfl_w, tfl_body_l, tfl_body_h]);
-    for (s = [-1, 1]) translate([tfl_x0 + tfl_ear_off, comp_y + s * tfl_hole_pitch / 2, z + tfl_ear_z]) hull() {
-        cylinder(r = 2.25, h = tfl_ear_t);
-        translate([-2.25, -s * 2.5 - 0.5, 0]) cube([4.5, 1, tfl_ear_t]);
+    for (s = [-1, 1]) translate([tfl_x0 + tfl_ear_off, comp_y + s * tfl_hole_pitch / 2, z + tfl_ear_z]) difference() {
+        hull() {
+            cylinder(r = 2.25, h = tfl_ear_t);
+            translate([-2.25, -s * 2.5 - 0.5, 0]) cube([4.5, 1, tfl_ear_t]);
+        }
+        translate([0, 0, -1]) cylinder(d = 2.2, h = tfl_ear_t + 2);
     }
     for (s = [-1, 1]) translate([tfl_lens_x, comp_y + s * tfl_lens_pitch / 2, z - tfl_rim_h])
         cylinder(d = tfl_lens_d, h = tfl_rim_h + eps);

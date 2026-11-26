@@ -4,68 +4,76 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>OpenGINS config</title>
+<link rel="stylesheet" href="/common.css">
 <style>
-:root{--bg:#f5f6f8;--card:#fff;--fg:#1c1f24;--dim:#6b7280;--line:#e3e6ea;--ok:#15803d;--bad:#b91c1c;--acc:#1d4ed8;--warn:#a16207}
-@media (prefers-color-scheme:dark){:root{--bg:#111316;--card:#1b1e23;--fg:#e6e8eb;--dim:#9aa1ab;--line:#2b2f36;--ok:#4ade80;--bad:#f87171;--acc:#93b4ff;--warn:#facc15}}
-*{box-sizing:border-box}
-body{margin:0;padding:16px;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,sans-serif}
-header{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:baseline;margin-bottom:12px}
-h1{font-size:18px;margin:0}
-a{color:var(--acc)}
-main{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
-section{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
-h2{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);margin:0 0 4px}
-.note{color:var(--dim);font-size:12px;margin:0 0 8px}
+[hidden]{display:none!important}
+.note{margin:0 0 8px}
+header .note{margin:0}
 label{display:grid;grid-template-columns:1fr 130px;gap:8px;align-items:center;padding:3px 0;border-top:1px solid var(--line)}
 label:first-of-type{border-top:0}
 label small{display:block;color:var(--dim);font-size:11px}
-input,select{width:100%;padding:4px 6px;font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:4px}
-input.changed,select.changed{border-color:var(--acc)}
-.bar{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
-button{font:inherit;padding:6px 12px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
-button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
-#msg{min-height:1.4em}
+.info{display:inline-block;margin-left:5px;padding:0 6px;border:1px solid var(--line);border-radius:9px;color:var(--dim);font-size:11px;cursor:pointer;user-select:none}
+.tip{grid-column:1/-1;color:var(--dim);font-size:12px;white-space:pre-line;padding:0 0 4px}
+.err{grid-column:1/-1;color:var(--bad);font-size:12px;font-weight:600;padding:0 0 4px}
+input.changed,select.changed{border-color:var(--acc);border-width:2px}
+input.invalid{border-color:var(--bad);border-width:2px}
+/* Save stays in reach at the bottom of a long form on a phone. */
+.savebar{position:sticky;bottom:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin:12px -16px 0;padding:10px 16px;
+background:var(--bg);border-top:1px solid var(--line)}
+#plan{flex:1;min-width:200px}
+#plan b{color:var(--fg)}
+.savebar #msg{flex-basis:100%;font-size:13px}
+.maint{margin-top:16px}
+.maint .bar{margin-top:6px}
 .ok{color:var(--ok)}.bad{color:var(--bad);font-weight:600}.warn{color:var(--warn)}
 </style>
 </head>
 <body>
-<header><h1>OpenGINS · config</h1><a href="/">status</a><a href="/status.html">details</a><a href="/calib.html">calibration</a><span id="src" class="note"></span></header>
-<div id="msg"></div>
+<header><h1>OpenGINS</h1><span id="src" class="note"></span></header>
+<nav class="tabs"><a href="/">Status</a><a href="/status.html">Details</a><a href="/config.html" aria-current="page">Config</a><a href="/calib.html">Calibration</a></nav>
+<!-- data-apply: what a change does (restart = the filter restarts, live =
+     applied without a restart, reboot = at the next boot); a field without
+     one takes its section's. data-show: shown only when that condition
+     (SHOW below) holds. A save posts only the fields changed on this page;
+     the unit keeps the rest. -->
 <form id="f" autocomplete="off">
-<main>
-<section><h2>GNSS antenna position</h2>
+<main class="cards">
+<section data-apply="restart"><h2>GNSS antenna position</h2>
 <p class="note">Antenna from the IMU, body frame (x forward, y right, z down), metres. Applies live: the filter restarts.</p>
-<label><span>x forward</span><input name="lever_x" inputmode="decimal"></label>
-<label><span>y right</span><input name="lever_y" inputmode="decimal"></label>
-<label><span>z down</span><input name="lever_z" inputmode="decimal"></label>
+<label><span>x forward</span><input name="lever_x" data-name="antenna x" inputmode="decimal"></label>
+<label><span>y right</span><input name="lever_y" data-name="antenna y" inputmode="decimal"></label>
+<label><span>z down</span><input name="lever_z" data-name="antenna z" inputmode="decimal"></label>
 </section>
-<section><h2>GNSS antenna mode</h2>
+<section data-apply="reboot"><h2>GNSS antenna mode</h2>
 <p class="note">Applies after a reboot; the receiver is re-provisioned then.</p>
-<label><span>mode</span><select name="antenna"><option value="single">single</option><option value="dual">dual (UM982)</option></select></label>
-<label><span>baseline direction<small>ANT1→ANT2, deg clockwise from forward; live</small></span><input name="baseline_yaw_deg" inputmode="decimal"></label>
-<label><span>baseline gate<small>m, live</small></span><input name="baseline_gate_m" inputmode="decimal"></label>
+<label><span>mode</span><select name="antenna" data-name="antenna mode"><option value="single">single</option><option value="dual">dual (UM982)</option></select></label>
+<label data-show="dual"><span>baseline direction<small>ANT1→ANT2, deg clockwise from forward; live</small></span><input name="baseline_yaw_deg" inputmode="decimal" data-apply="live"></label>
+<label data-show="dual"><span>baseline gate<small>m, live</small></span><input name="baseline_gate_m" inputmode="decimal" data-apply="live"></label>
 </section>
-<section><h2>Platform</h2>
+<section data-apply="reboot"><h2>Platform</h2>
 <p class="note">When the GNSS course counts as a heading for the magnetometer calibration. Applies after a reboot.</p>
 <label><span>platform</span><select name="platform"><option value="tractor">tractor</option><option value="pole">survey pole</option><option value="multirotor">multirotor UAV</option><option value="fixed_wing">fixed-wing UAV</option></select></label>
-<label id="anth"><span>antenna height<small>m over ground along the body down axis; the position becomes the ground point below the antenna, 0 = the antenna; live</small></span><input name="ant_height_m" inputmode="decimal"></label>
+<label data-show="antH"><span>antenna height<small>m over ground along the body down axis; the position becomes the ground point below the antenna, 0 = the antenna; live, the filter keeps running</small></span><input name="ant_height_m" inputmode="decimal" data-apply="live"></label>
+<label data-show="tractor"><span>cab roll centre<small>m above the ground, 0 = off (tractor: the ground point follows the chassis below it); live</small></span><input name="cab_roll_centre_m" inputmode="decimal" data-apply="live"></label>
 </section>
-<section><h2>Sensors fitted</h2>
+<section data-apply="live"><h2>Sensors fitted</h2>
 <p class="note">Turn off what this vehicle doesn't have: it isn't started or read, and nothing of it reaches the filter. Applies live; the barometer and magnetometer restart the filter.</p>
-<label><span>barometer<small>BMP581</small></span><select name="sensor_baro"><option value="on">on</option><option value="off">off</option></select></label>
-<label><span>INS height from<small>chosen when the filter starts, so a change restarts it; with the barometer off the GNSS height is used anyway</small></span><select name="height_src" data-tip="Where the INS takes its height from. GNSS fuses the RTK height directly (centimetres); barometer gives a steady relative height (decimetres) whose absolute value follows GNSS only through the offset filter. auto: GNSS on a survey pole, barometer elsewhere."><option value="auto">auto: GNSS on a survey pole, else barometer</option><option value="baro">barometer</option><option value="gnss">GNSS (RTK)</option></select></label>
-<label><span>magnetometer<small>TM210, into the filter</small></span><select name="sensor_mag"><option value="on">on</option><option value="off">off</option></select></label>
+<label><span>barometer<small>BMP581</small></span><select name="sensor_baro" data-apply="restart"><option value="on">on</option><option value="off">off</option></select></label>
+<label><span>INS height from<small>chosen when the filter starts, so a change restarts it; with the barometer off the GNSS height is used anyway</small></span><select name="height_src" data-apply="restart" data-tip="Where the INS takes its height from. GNSS fuses the RTK height directly (centimetres); barometer gives a steady relative height (decimetres) whose absolute value follows GNSS only through the offset filter. auto: GNSS on a survey pole, barometer elsewhere."><option value="auto">auto: GNSS on a survey pole, else barometer</option><option value="baro">barometer</option><option value="gnss">GNSS (RTK)</option></select></label>
+<label><span>magnetometer<small>TM210, into the filter</small></span><select name="sensor_mag" data-apply="restart"><option value="on">on</option><option value="off">off</option></select></label>
 <label><span>optical flow<small>camera trigger, speed into the filter</small></span><select name="sensor_flow"><option value="on">on</option><option value="off">off</option></select></label>
 <label><span>wheel pulses<small>speed inputs</small></span><select name="sensor_wheel"><option value="on">on</option><option value="off">off</option></select></label>
 </section>
-<section><h2>Optical-flow camera</h2>
+<section data-apply="live" data-show="flow"><h2>Optical-flow camera</h2>
 <p class="note">Camera looking straight down. Height of the lens above level ground; image top direction; camera from the IMU, body frame (x forward, y right, z down), metres. Applies live, the filter keeps running.</p>
-<label><span>height<small>m above the ground</small></span><input name="flow_height_m" inputmode="decimal"></label>
-<label><span>image top<small>deg clockwise from forward</small></span><input name="flow_cam_yaw_deg" inputmode="decimal"></label>
-<label><span>x forward</span><input name="flow_lever_x" inputmode="decimal"></label>
-<label><span>y right</span><input name="flow_lever_y" inputmode="decimal"></label>
-<label><span>z down</span><input name="flow_lever_z" inputmode="decimal"></label>
-<p class="note">Front camera unit only: its TM171 against the vehicle body, sent to the unit once a second with the height and image direction above. 0 0 0 = mounted level, x forward.</p>
+<label><span>height<small>m above the ground</small></span><input name="flow_height_m" data-name="camera height" inputmode="decimal"></label>
+<label><span>image top<small>deg clockwise from forward</small></span><input name="flow_cam_yaw_deg" data-name="camera image top" inputmode="decimal"></label>
+<label><span>x forward</span><input name="flow_lever_x" data-name="camera x" inputmode="decimal"></label>
+<label><span>y right</span><input name="flow_lever_y" data-name="camera y" inputmode="decimal"></label>
+<label><span>z down</span><input name="flow_lever_z" data-name="camera z" inputmode="decimal"></label>
+</section>
+<section data-apply="live" data-show="front"><h2>Front camera unit</h2>
+<p class="note">Its TM171 against the vehicle body, sent to the unit once a second with the camera height and image direction. 0 0 0 = mounted level, x forward. Applies live (the TM171's position restarts the filter while it is the IMU in use).</p>
 <label><span>TM171 roll<small>deg</small></span><input name="front_imu_roll_deg" inputmode="decimal"></label>
 <label><span>TM171 pitch<small>deg</small></span><input name="front_imu_pitch_deg" inputmode="decimal"></label>
 <label><span>TM171 yaw<small>deg</small></span><input name="front_imu_yaw_deg" inputmode="decimal"></label>
@@ -73,9 +81,8 @@ button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
 <label><span>TM171 y right<small>m</small></span><input name="front_imu_lever_y" inputmode="decimal"></label>
 <label><span>TM171 z down<small>m</small></span><input name="front_imu_lever_z" inputmode="decimal"></label>
 <label><span>TM171 as backup IMU<small>when the roof TM210 is lost</small></span><select name="front_imu_backup"><option value="on">on</option><option value="off">off</option></select></label>
-<label><span>cab roll centre<small>m above the ground, 0 = off (tractor: the ground point follows the chassis below it)</small></span><input name="cab_roll_centre_m" inputmode="decimal"></label>
 </section>
-<section><h2>Filter tuning</h2>
+<section data-apply="restart"><h2>Filter tuning</h2>
 <p class="note">IMU noise figures. Applies live: the filter restarts.</p>
 <label><span>acc PSD<small>(m/s²)²/Hz</small></span><input name="acc_psd" inputmode="decimal"></label>
 <label><span>gyro PSD<small>(rad/s)²/Hz</small></span><input name="gyr_psd" inputmode="decimal"></label>
@@ -83,115 +90,248 @@ button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
 <label><span>acc bias RW<small>m/s²/√s</small></span><input name="acc_bias_rw" inputmode="decimal"></label>
 <label><span>course min speed<small>m/s, 0 = INSLIB default</small></span><input name="automotive_min_speed" inputmode="decimal"></label>
 <p class="note">How long the filter keeps giving a position on the IMU alone after the last GNSS fix. Applies live, the filter keeps running.</p>
-<label><span>dead reckoning<small>s, 0 = INSLIB default (10 s)</small></span><input name="max_deadreckoning_s" inputmode="decimal"></label>
-<label><span>GNSS position decimation<small>1 of N epochs (10 Hz), 1 = every one</small></span><input name="gnss_pos_decim" inputmode="numeric" data-tip="The GNSS position is fused on 1 of every N epochs, the velocity alone on the others. A position error that drifts slowly (multipath, ionosphere, a single-point fix) is then followed less and trusted less. 50 = the position every 5 s, which gave the best result on a static single-point log; not yet tested with RTK or in motion. Applies live, the filter keeps running."></label>
-<p class="note">Height offset filter: learns the barometer's offset to the GNSS height, which gives the absolute height during a GNSS outage. With the barometric INS height (see "INS height from") it also takes the barometer's weather drift back off the absolute height. 0 = INSLIB default. Applies live: the filter restarts.</p>
+<label><span>dead reckoning<small>s, 0 = INSLIB default (10 s)</small></span><input name="max_deadreckoning_s" inputmode="decimal" data-apply="live"></label>
+<label><span>GNSS position decimation<small>1 of N epochs (10 Hz), 1 = every one</small></span><input name="gnss_pos_decim" inputmode="numeric" data-apply="live" data-int data-tip="The GNSS position is fused on 1 of every N epochs, the velocity alone on the others. A position error that drifts slowly (multipath, ionosphere, a single-point fix) is then followed less and trusted less. 50 = the position every 5 s, which gave the best result on a static single-point log; not yet tested with RTK or in motion. Applies live, the filter keeps running."></label>
+<div data-show="baro">
+<p class="note">Height offset filter: learns the barometer's offset to the GNSS height, which gives the absolute height during a GNSS outage. With the barometric INS height (see "INS height from") it also takes the barometer's weather drift back off the absolute height. 0 = INSLIB default. Applies live: the filter restarts. The barometer sigma is used, and shown, only with the barometric INS height.</p>
 <label><span>offset fusion interval<small>s, 0 = INSLIB default (10 s)</small></span><input name="offset_interval_s" inputmode="decimal" data-tip="Shortest time between two baro/GNSS pairs fused into the offset. Shorter follows the barometer's drift faster and shrinks the height step when GNSS drops out; longer averages more noise. INSLIB's 10 s is sized for a barometric INS height."></label>
 <label><span>offset sigma inflation<small>×, 0 = INSLIB default (3)</small></span><input name="offset_inflation" inputmode="decimal" data-tip="Factor on the barometer and GNSS 1-sigma before a pair is fused. Lower trusts each pair more and converges faster; higher keeps a single pair from moving the offset far. 1 = the sigmas as reported."></label>
 <label><span>offset random walk<small>m/√s, 0 = INSLIB default (0.3)</small></span><input name="offset_rw_mps" inputmode="decimal" data-tip="How fast the offset may drift between pairs (weather, ISA-model error during height changes). Too low and real drift is taken for outliers and followed late; too high and the offset gets noisy."></label>
-<label><span>offset barometer sigma<small>m, 0 = INSLIB default (2 m)</small></span><input name="offset_baro_sd_m" inputmode="decimal" data-tip="Used only with the barometric INS height (with the GNSS height INSLIB's 2 m averages more pairs). The barometer's 1-sigma for each baro/GNSS pair; it sets how sure the offset is. With the barometric INS height the absolute height takes the weather drift back off less one sigma of the offset, so a sigma that is too large stays in it as a bias (INSLIB's 2 m: 1.4 m in a static overnight log; 0.1 m: 0.17 m rms). Too small and real height changes in motion, where the barometer's model error grows, are taken for outliers."></label>
+<label data-show="baroH"><span>offset barometer sigma<small>m, 0 = INSLIB default (2 m)</small></span><input name="offset_baro_sd_m" inputmode="decimal" data-tip="Used only with the barometric INS height (with the GNSS height INSLIB's 2 m averages more pairs). The barometer's 1-sigma for each baro/GNSS pair; it sets how sure the offset is. With the barometric INS height the absolute height takes the weather drift back off less one sigma of the offset, so a sigma that is too large stays in it as a bias (INSLIB's 2 m: 1.4 m in a static overnight log; 0.1 m: 0.17 m rms). Too small and real height changes in motion, where the barometer's model error grows, are taken for outliers."></label>
+</div>
 </section>
-<section><h2>Ethernet (W5500)</h2>
+<section data-apply="live"><h2>Ethernet (W5500)</h2>
 <p class="note">Wired output to AgOpenWeb / AgOpenGPS: $PAOGI at 10 Hz to the subnet broadcast on UDP 9999, RTCM from its NTRIP client on UDP 2233 to the receiver. Off = no module fitted; its pins are left alone. Applies live.</p>
 <label><span>Ethernet fitted<small>W5500 on SPI0, GP16–21</small></span><select name="eth_fitted"><option value="on">on</option><option value="off">off</option></select></label>
-<label class="eth"><span>IP address<small>static; 192.168.5.124 is the AgOpenGPS GPS module</small></span><input name="eth_ip" inputmode="decimal"></label>
-<label class="eth"><span>subnet mask</span><input name="eth_mask" inputmode="decimal"></label>
-<label class="eth"><span>gateway<small>0.0.0.0 = none</small></span><input name="eth_gw" inputmode="decimal"></label>
-<p class="note">The front camera unit sends its flow to UDP 5800. AgOpenGPS / AgOpenWeb module scans on UDP 8888 are answered.</p>
+<label data-show="eth"><span>IP address<small>static; 192.168.5.124 is the AgOpenGPS GPS module</small></span><input name="eth_ip" inputmode="decimal"></label>
+<label data-show="eth"><span>subnet mask</span><input name="eth_mask" inputmode="decimal"></label>
+<label data-show="eth"><span>gateway<small>0.0.0.0 = none</small></span><input name="eth_gw" inputmode="decimal"></label>
+<p class="note" data-show="eth">The front camera unit sends its flow to UDP 5800. AgOpenGPS / AgOpenWeb module scans on UDP 8888 are answered.</p>
 </section>
-<section><h2>Corrections (RTCM)</h2>
+<section data-apply="live"><h2>Corrections (RTCM)</h2>
 <p class="note">Only one source feeds the receiver; the other's frames are dropped. Applies live.</p>
-<label><span>source<small>auto: the first to deliver, until it is silent for 5 s</small></span><select name="rtcm_src"><option value="auto">auto</option><option value="ethernet">Ethernet (AgOpenWeb NTRIP)</option><option value="bluetooth">Bluetooth (phone)</option></select></label>
+<label><span>source<small>auto: the first to deliver, until it is silent for 5 s</small></span><select name="rtcm_src" data-name="correction source"><option value="auto">auto</option><option value="ethernet">Ethernet (AgOpenWeb NTRIP)</option><option value="bluetooth">Bluetooth (phone)</option></select></label>
 </section>
-<section><h2>Wi-Fi</h2>
+<section data-apply="reboot"><h2>Wi-Fi</h2>
 <p class="note">Applies after a reboot. The access point OpenGINS is open, at 192.168.4.1.</p>
-<label><span>mode</span><select name="wifi_mode"><option value="auto">auto (AP if no network in 30 s)</option><option value="sta">network only</option><option value="ap">access point only</option></select></label>
-<label><span>network</span><input name="sta_ssid" maxlength="32"></label>
-<label><span>password<small id="pwnote">empty = open network</small></span><input name="sta_password" type="password" maxlength="63" placeholder="unchanged"></label>
+<label><span>mode</span><select name="wifi_mode" data-name="Wi-Fi mode"><option value="auto">auto (AP if no network in 30 s)</option><option value="sta">network only</option><option value="ap">access point only</option></select></label>
+<label><span>network</span><input name="sta_ssid" data-name="Wi-Fi network" maxlength="32"></label>
+<label><span>password<small id="pwnote">empty = open network</small></span><input name="sta_password" data-name="Wi-Fi password" type="password" maxlength="63" placeholder="unchanged"></label>
 </section>
 </main>
+<div class="savebar">
+<button type="submit" class="primary" id="save" disabled>Save</button>
+<span id="plan" class="note">no changes</span>
+<div id="msg"></div>
+</div>
+</form>
+<section class="maint"><h2>Maintenance</h2>
+<p class="note" id="maintnote">Each asks first. Reboot and the reconfigure buttons interrupt the output for a few seconds.</p>
 <div class="bar">
-<button type="submit" class="primary">Save</button>
-<button type="button" data-a="defaults">Revert to defaults</button>
 <button type="button" data-a="reboot">Reboot</button>
 <button type="button" data-a="reconfigure_gnss">Reconfigure GNSS</button>
 <button type="button" data-a="reconfigure_imu">Reconfigure IMU</button>
+<button type="button" data-a="defaults">Revert to defaults</button>
 <button type="button" data-a="calib_reset">IMU calibration to factory</button>
 </div>
-</form>
+</section>
+<script src="/common.js"></script>
 <script>
 "use strict";
 const f=document.getElementById("f"),msg=document.getElementById("msg");
-let cur=null,lastSeq=-1,pwTouched=false;
+let cur=null,pwTouched=false,platformNow=null,imuFront=false,onAp=false;
 const CONFIRM={defaults:"Erase the saved settings and go back to the build defaults?",reboot:"Reboot the unit now?",reconfigure_gnss:"Re-provision the GNSS receiver (FRESET and the full sequence)?",reconfigure_imu:"Run the IMU provisioning sequence again?",calib_reset:"Reset the whole IMU calibration to factory (all learned data and sets erased, no correction)? It applies at once and restarts the filter; the unit must be still."};
 function say(t,c){msg.textContent=t;msg.className=c||"";}
-/* Antenna height over ground: tractor and survey pole only. Hidden, it still posts, so the saved value is kept. */
-function showAntH(){document.getElementById("anth").style.display=/^(tractor|pole)$/.test(f.platform.value)?"":"none";}
-f.platform.addEventListener("change",showAntH);
-/* Ethernet addresses: shown only while Ethernet is fitted; hidden, they still post, so the saved values are kept. */
-function showEth(){for(const l of document.querySelectorAll("label.eth"))l.style.display=f.eth_fitted.value==="on"?"":"none";}
-f.eth_fitted.addEventListener("change",showEth);
+const MAINT_NOTE=document.getElementById("maintnote").textContent;
+const val=n=>f.elements[n].value;
+/* The platform in effect since boot (/status.json); a platform change waits
+ * for a reboot. Until it is known, the selected one. */
+const platEff=()=>platformNow||val("platform");
+/* A platform's fields show while it is in effect or selected for the next
+ * boot, so neither the active nor the pending one's values are hidden. */
+const platIs=re=>re.test(platEff())||re.test(val("platform"));
+/* The INS height in effect for these values: GNSS with the barometer off, or
+ * by choice, or on auto on a survey pole (the platform in effect, as
+ * settings_ins_gnss_height() takes it). */
+const gnssHeight=()=>val("sensor_baro")==="off"||val("height_src")==="gnss"||(val("height_src")==="auto"&&platEff()==="pole");
+const SHOW={
+  dual:()=>val("antenna")==="dual",
+  antH:()=>platIs(/^(tractor|pole)$/),
+  tractor:()=>platIs(/^tractor$/),
+  flow:()=>val("sensor_flow")==="on",
+  /* The front unit talks over Ethernet, or over USB with the flow on. */
+  front:()=>val("eth_fitted")==="on"||val("sensor_flow")==="on",
+  eth:()=>val("eth_fitted")==="on",
+  baro:()=>val("sensor_baro")==="on",
+  baroH:()=>!gnssHeight(),
+};
+function showFields(){for(const el of document.querySelectorAll("[data-show]"))el.hidden=!SHOW[el.dataset.show]();}
+/* What changing this field does. The TM171's position is the antenna lever
+ * arm's base while it is the IMU in use (nav_params_from_settings()). */
+function applyOf(el){
+  if(imuFront&&/^front_imu_lever_/.test(el.name))return"restart";
+  const a=el.closest("[data-apply]");
+  return a?a.dataset.apply:"live";
+}
+/* Each field's explanation (data-tip) and default: a hover tooltip on a
+ * desktop, and an "i" that opens it under the row, since phones have no
+ * hover. A span, not a button: a label passes clicks on its text to the
+ * first button inside it. */
+function tip(el,text){
+  el.title=text;
+  const l=el.closest("label");
+  if(!l)return;
+  let i=l.querySelector(".info"),t=l.querySelector(".tip");
+  if(!i){
+    i=document.createElement("span");i.className="info";i.textContent="i";
+    i.setAttribute("role","button");i.tabIndex=0;i.title="explanation and default";
+    t=document.createElement("div");t.className="tip";t.hidden=true;
+    const flip=e=>{e.preventDefault();t.hidden=!t.hidden;};
+    i.addEventListener("click",flip);
+    i.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" ")flip(e);});
+    const s=l.firstElementChild;s.insertBefore(i,s.querySelector("small"));l.appendChild(t);
+  }
+  t.textContent=text;
+}
+/* The field's name in messages: data-name where the row text alone ("mode", "x forward") is ambiguous. */
+const label=el=>{if(el.dataset.name)return el.dataset.name;const s=el.closest("label");return s?s.firstElementChild.firstChild.textContent.trim():el.name;};
+/* The limits from /config.json ("range", the firmware's own checks); null
+ * when the value is fine. */
+function badValue(el){
+  const r=cur&&cur.range&&cur.range[el.name];
+  if(!r)return null;
+  const t=el.value.trim(),v=Number(t);
+  if(t===""||!isFinite(v))return"a number";
+  if(v<r[0]||v>r[1])return"within "+r[0]+" .. "+r[1];
+  if(el.dataset.int!==undefined&&v!==Math.round(v))return"a whole number";
+  return null;
+}
+function mark(el){
+  const l=el.closest("label"),why=badValue(el);
+  el.classList.toggle("invalid",!!why);
+  let e=l&&l.querySelector(".err");
+  if(why&&l&&!e){e=document.createElement("div");e.className="err";l.appendChild(e);}
+  if(e){e.textContent=why?"must be "+why:"";e.hidden=!why;}
+  return why;
+}
+function changedFields(){
+  const o=[];
+  for(const el of f.elements){
+    if(!el.name)continue;
+    if(el.name==="sta_password"?pwTouched:(cur&&cur.settings[el.name]!==undefined&&String(cur.settings[el.name])!==el.value.trim()))o.push(el);
+  }
+  return o;
+}
+/* Next to Save: how many changes, and what saving them does. */
+function update(){
+  showFields();
+  const ch=changedFields(),bad=[...f.elements].filter(el=>el.name&&mark(el));
+  const save=document.getElementById("save"),plan=document.getElementById("plan");
+  save.textContent=ch.length?"Save "+ch.length+" change"+(ch.length>1?"s":""):"Save";
+  save.disabled=!cur||!ch.length||bad.length>0;
+  if(bad.length){plan.innerHTML="";plan.className="note bad";plan.textContent="fix "+bad.map(label).join(", ")+" first";return;}
+  plan.className="note";
+  if(!ch.length){plan.textContent="no changes";return;}
+  const g={restart:[],reboot:[],live:[]};
+  for(const el of ch)g[applyOf(el)].push(label(el));
+  const W={restart:"restarts the filter",reboot:"waits for a reboot",live:"applies live"};
+  plan.innerHTML=["restart","reboot","live"].filter(k=>g[k].length)
+    .map(k=>"<b>"+W[k]+":</b> "+g[k].map(x=>x.replace(/[&<>]/g,"")).join(", ")).join("; ");
+}
 function fill(d){
   cur=d;
   const s=d.settings;
   for(const el of f.elements){
     if(!el.name||el.name==="sta_password")continue;
-    /* Hover tooltip: the explanation (data-tip) where a field has one, then its default. */
-    if(s[el.name]!==undefined){el.value=s[el.name];el.title=(el.dataset.tip?el.dataset.tip+"\n":"")+"default: "+d.defaults[el.name];}
+    if(s[el.name]!==undefined){
+      el.value=s[el.name];
+      const r=d.range&&d.range[el.name];
+      tip(el,(el.dataset.tip?el.dataset.tip+"\n":"")+"default: "+d.defaults[el.name]+(r?" · allowed "+r[0]+" .. "+r[1]:""));
+    }
     el.classList.remove("changed");
   }
   f.sta_password.value="";pwTouched=false;
-  showAntH();showEth();
   document.getElementById("pwnote").textContent=s.sta_password_set?"set; empty = open network":"none (open); empty = open network";
   let src="settings from "+(d.source==="flash"?"flash, record "+d.seq:"build defaults");
   if(d.reboot_pending.length)src+=" · reboot pending: "+d.reboot_pending.join(", ");
   document.getElementById("src").textContent=src;
+  update();
 }
-async function load(){
-  const r=await fetch("/config.json",{cache:"no-store"});
-  const d=await r.json();
-  return d;
-}
-async function waitResult(prev){
-  for(let i=0;i<20;i++){
-    await new Promise(r=>setTimeout(r,250));
-    try{const d=await load();if(d.last_result.seq!==prev)return d;}catch(e){}
+const load=()=>OG.getJson("/config.json");
+/* The first read retries: a busy unit answers 404 while its transfer slots are full. */
+async function firstLoad(){
+  for(let i=0,wait=500;;i++,wait=Math.min(wait*2,5000)){
+    try{fill(await load());if(i)say("");break;}
+    catch(e){say("could not read /config.json ("+(e.name==="AbortError"?"no answer":e.message)+"), retrying…","bad");}
+    await new Promise(r=>setTimeout(r,wait));
   }
-  return null;
+  /* The platform and IMU in effect, and whether this page came over the
+   * open AP, where the unit refuses everything but Save (config_web.c).
+   * Read again every 5 s: the IMU in use can switch while the page is open. */
+  OG.poll(readStatus,5000);
+}
+async function readStatus(){
+  const st=await OG.getJson("/status.json");
+  platformNow=st.platform||null;
+  imuFront=!!(st.imu&&st.imu.source&&st.imu.source!=="roof");
+  const ap=!!(st.wifi&&st.wifi.state==="ap");
+  if(ap!==onAp){
+    onAp=ap;
+    for(const b of document.querySelectorAll("button[data-a]"))b.disabled=onAp;
+    const n=document.getElementById("maintnote");
+    n.textContent=onAp?"Over the open access point the unit only accepts Save. Join the station network for these.":MAINT_NOTE;
+    n.className=onAp?"note warn":"note";
+  }
+  update();
+}
+/* After a reboot: wait until the unit answers again, then reload. */
+async function waitBack(){
+  const t0=Date.now();
+  await new Promise(r=>setTimeout(r,3000));
+  while(Date.now()-t0<60000){
+    try{await OG.getJson("/config.json",1500);location.reload();return;}catch(e){}
+    say("rebooting… waiting for the unit ("+Math.round((Date.now()-t0)/1000)+" s)","warn");
+    await new Promise(r=>setTimeout(r,1500));
+  }
+  say("the unit didn't come back on this address within 60 s; it may have moved to the access point OpenGINS (192.168.4.1) or another IP","bad");
 }
 async function send(params){
-  const prev=cur?cur.last_result.seq:0;
-  let r;
-  try{
-    r=await fetch("/config",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams(params).toString()});
-  }catch(e){say("no answer from the unit","bad");return;}
   let j;
-  try{j=await r.json();}catch(e){say("unexpected reply ("+r.status+")","bad");return;}
+  try{j=await OG.postForm("/config",params);}
+  catch(e){say(e.name==="AbortError"||e instanceof TypeError?"no answer from the unit":"unexpected reply ("+e.message+")","bad");return;}
   if(!j.ok){say(j.error,"bad");return;}
   say(j.queued+"…");
-  if(params.action==="reboot"){say("rebooting; reconnect in a few seconds","warn");return;}
-  const d=await waitResult(prev);
-  if(!d){say("no result from the unit","bad");return;}
-  fill(d);
-  const t=d.last_result.text;
-  say(t,/failed/.test(t)?"bad":(/reboot/.test(t)?"warn":"ok"));
+  /* A reboot repeated after the unit is back has been done already. */
+  if(params.action==="reboot"&&j.repeat!=="done"){leaving=true;waitBack();return;}
+  const r=await OG.commandResult(j);
+  if(!r){say("no result from the unit","bad");return;}
+  if(r.doc)fill(r.doc);else{try{fill(await load());}catch(e){}}
+  const t=r.text;
+  say(t,/failed/.test(t)?"bad":(/reboot|already/.test(t)?"warn":"ok"));
 }
 f.addEventListener("input",e=>{
   if(e.target.name==="sta_password")pwTouched=true;
   if(cur&&e.target.name&&cur.settings[e.target.name]!==undefined)
-    e.target.classList.toggle("changed",String(cur.settings[e.target.name])!==e.target.value);
+    e.target.classList.toggle("changed",String(cur.settings[e.target.name])!==e.target.value.trim());
+  update();
 });
 f.addEventListener("submit",e=>{
   e.preventDefault();
+  if(document.getElementById("save").disabled)return;
+  /* Only the fields changed here: the unit keeps the rest at their current
+   * values (config_web.h), so a save from another tab in between is not
+   * overwritten by this page's older copy. */
   const p={action:"save"};
-  for(const el of f.elements){if(el.name&&el.name!=="sta_password")p[el.name]=el.value.trim();}
-  if(pwTouched)p.sta_password=f.sta_password.value;
+  for(const el of changedFields())p[el.name]=el.name==="sta_password"?el.value:el.value.trim();
   send(p);
 });
 for(const b of document.querySelectorAll("button[data-a]")){
   b.addEventListener("click",()=>{const a=b.dataset.a;if(confirm(CONFIRM[a]))send({action:a});});
 }
-load().then(fill).catch(()=>say("could not read /config.json","bad"));
+/* Unsaved changes: ask before leaving the page. */
+let leaving=false;
+window.addEventListener("beforeunload",e=>{if(!leaving&&cur&&changedFields().length){e.preventDefault();e.returnValue="";}});
+firstLoad();
 </script>
 </body>
 </html>

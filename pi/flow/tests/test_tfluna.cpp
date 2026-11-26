@@ -227,9 +227,51 @@ static void test_range_buffer()
     CHECK(!c.at(10 * 4 * 1000000LL, 1000000, 0).valid);  // long gone from the ring
 }
 
+static void test_i2c()
+{
+    // ID_SAVE_SETTINGS: the manual's full sequence is 5A 04 11 00 (sum not
+    // checked by default); ours carries the real sum.
+    const Bytes save = cmd_save_settings();
+    CHECK((save == Bytes{0x5A, 0x04, 0x11, 0x6F}));
+
+    // Registers 0x00..0x09: 123 cm, Amp 1500, 31.25 C (3125 in 0.01 C),
+    // tick 0x1234, error 0.
+    const uint8_t r[I2C_DATA_LEN] = {123, 0, 0xDC, 0x05, 0x35, 0x0C, 0x34, 0x12, 0, 0};
+    const I2cData d = decode_i2c(r, 5000);
+    CHECK(d.s.t_ns == 5000);
+    CHECK_NEAR(d.s.range_m, 1.23, 1e-6);
+    CHECK(d.s.amp == 1500);
+    CHECK_NEAR(d.s.temp_c, 31.25, 1e-4);
+    CHECK(d.s.ok());
+    CHECK(d.tick == 0x1234);
+    CHECK(d.error == 0);
+    // Weak return: Amp 50, the dummy distance 0.
+    const uint8_t w[I2C_DATA_LEN] = {0, 0, 50, 0, 0x35, 0x0C, 0, 0, 0, 0};
+    CHECK(decode_i2c(w, 0).s.status == Status::LowAmp);
+    // 8.5 m: past the rated range.
+    const uint8_t f[I2C_DATA_LEN] = {0x52, 0x03, 0xDC, 0x05, 0x35, 0x0C, 0, 0, 0, 0};
+    CHECK(decode_i2c(f, 0).s.status == Status::TooFar);
+    // Below 0 C the temperature register is signed.
+    const uint8_t c[I2C_DATA_LEN] = {100, 0, 0xDC, 0x05, 0x0C, 0xFE, 0, 0, 0, 0};  // -500
+    CHECK_NEAR(decode_i2c(c, 0).s.temp_c, -5.0, 1e-4);
+
+    std::string chip;
+    unsigned    line = 0;
+    CHECK(parse_gpio_spec("gpiochip2:11", chip, line) && chip == "/dev/gpiochip2" && line == 11);
+    CHECK(parse_gpio_spec("/dev/gpiochip4:26", chip, line) && chip == "/dev/gpiochip4" && line == 26);
+    CHECK(parse_gpio_spec("2:11", chip, line) && chip == "/dev/gpiochip2" && line == 11);
+    CHECK(!parse_gpio_spec("gpiochip2", chip, line));
+    CHECK(!parse_gpio_spec("gpiochip2:", chip, line));
+    CHECK(!parse_gpio_spec(":11", chip, line));
+    CHECK(!parse_gpio_spec("gpiochip2x:11", chip, line));
+    CHECK(!parse_gpio_spec("gpiochip2:1a", chip, line));
+    CHECK(!parse_gpio_spec("/dev/i2c-7:11", chip, line));
+}
+
 int main()
 {
     test_commands();
+    test_i2c();
     test_classify();
     test_data_frame();
     test_stream();

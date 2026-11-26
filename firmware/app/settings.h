@@ -194,6 +194,18 @@ unsigned settings_loaded_version(void);
 /* NULL if every field is in range, else a message naming the field. */
 const char *settings_validate(const settings_t *s);
 
+/* The float fields' limits, one entry per web form field (the key is its
+ * name on config.html), checked by settings_validate() and published in
+ * /config.json so the page can mark a bad value before posting. */
+typedef struct {
+    const char *key;
+    uint16_t offset; /* of the float in settings_t */
+    float lo, hi;
+    const char *msg; /* settings_validate()'s answer when out of range */
+} settings_range_t;
+extern const settings_range_t settings_ranges[];
+extern const unsigned settings_n_ranges;
+
 /* The front camera unit's settings message (common/flow_link.h,
  * FLOW_MSG_UNIT_CFG) from these settings, with this sequence number. */
 void settings_unit_cfg(const settings_t *s, uint32_t seq, flow_msg_unit_cfg_t *out);

@@ -77,9 +77,22 @@ add_executable(app
     app/rtcm_src.c
     app/aog_pgn.c
     app/clock_sync.c
+    app/reset_reason.c
 )
 
 target_include_directories(app PRIVATE app)
+
+# Firmware version for /status.json and the USB banner: git describe and the
+# commit date, regenerated at every build but rewritten only when it changes
+# (tools/fw_version.cmake), so a build with nothing new relinks nothing.
+set(FW_VERSION_C ${CMAKE_CURRENT_BINARY_DIR}/generated/fw_version.c)
+add_custom_target(fw_version
+    COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_CURRENT_LIST_DIR} -DOUT=${FW_VERSION_C}
+            -P ${CMAKE_CURRENT_LIST_DIR}/tools/fw_version.cmake
+    BYPRODUCTS ${FW_VERSION_C}
+    COMMENT "Firmware version from git")
+target_sources(app PRIVATE ${FW_VERSION_C})
+add_dependencies(app fw_version)
 
 target_compile_options(app PRIVATE -Wall -Wextra)
 
@@ -158,7 +171,9 @@ if(WEB_MODE STREQUAL "always" OR WEB_MODE STREQUAL "switch")
         ${CMAKE_CURRENT_LIST_DIR}/app/web/www/index.html
         ${CMAKE_CURRENT_LIST_DIR}/app/web/www/status.html
         ${CMAKE_CURRENT_LIST_DIR}/app/web/www/config.html
-        ${CMAKE_CURRENT_LIST_DIR}/app/web/www/calib.html)
+        ${CMAKE_CURRENT_LIST_DIR}/app/web/www/calib.html
+        ${CMAKE_CURRENT_LIST_DIR}/app/web/www/common.js
+        ${CMAKE_CURRENT_LIST_DIR}/app/web/www/common.css)
 elseif(WEB_MODE STREQUAL "off")
     target_compile_definitions(app PRIVATE APP_WEB_MODE=0)
 else()

@@ -5,6 +5,8 @@
 //
 //   tfluna --port /dev/ttyUSB0                 100 Hz, mm format, own filters off
 //   tfluna --port /dev/ttyS4 --rate 250 --seconds 60 > board_1m.csv
+//   tfluna --port /dev/ttyUSB0 --save --seconds 2   save filters off etc. before I2C use
+//   tfluna --i2c /dev/i2c-7 --drdy gpiochip2:11     I2C, pin 6 on ROCK 4SE header pin 7
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -25,8 +27,15 @@ void usage()
 {
     std::fprintf(stderr,
                  "usage: tfluna --port DEV [--baud N] [--rate HZ] [--cm] [--device-filter]\n"
-                 "              [--single-freq | --dual-freq] [--seconds S] [--quiet]\n"
+                 "              [--single-freq | --dual-freq] [--save] [--seconds S] [--quiet]\n"
+                 "       tfluna --i2c DEV --drdy CHIP:LINE [--addr 0xNN] [--rate HZ] [--seconds S]\n"
+                 "              [--quiet]\n"
                  "  --baud: what the sensor runs at (115200 unless saved otherwise)\n"
+                 "  --save: also save the settings in the sensor's flash (UART only). Do it once\n"
+                 "         before moving the sensor to I2C, where its own filters can't be set\n"
+                 "  --i2c: I2C mode (pin 5 at GND before power-on), cm only; --drdy: the GPIO its\n"
+                 "         pin 6 goes to (gpiochip2:11 = ROCK 4SE header pin 7); --addr: 0x10\n"
+                 "         unless saved otherwise\n"
                  "  --rate: output rate, 1..250 Hz (default 100; the sensor uses 500/n Hz)\n"
                  "  --cm: 9-byte/cm format instead of mm\n"
                  "  --device-filter: keep the sensor's own Kalman and median filters (default off)\n"
@@ -60,6 +69,13 @@ int main(int argc, char** argv)
         };
         try {
             if (k == "--port") p.port = val();
+            else if (k == "--i2c") p.i2c_dev = val();
+            else if (k == "--drdy") p.drdy = val();
+            else if (k == "--addr") {
+                const unsigned long a = std::stoul(val(), nullptr, 0);
+                if (a < 0x08 || a > 0x77) throw std::out_of_range("--addr");
+                p.i2c_addr = static_cast<uint8_t>(a);
+            } else if (k == "--save") p.save_settings = true;
             else if (k == "--baud") p.baud = static_cast<unsigned>(std::stoul(val()));
             else if (k == "--rate") p.rate_hz = static_cast<unsigned>(std::stoul(val()));
             else if (k == "--cm") p.mm = false;
@@ -78,7 +94,7 @@ int main(int argc, char** argv)
             return 2;
         }
     }
-    if (p.port.empty()) {
+    if (p.port.empty() == p.i2c_dev.empty()) {  // one of the two
         usage();
         return 2;
     }
@@ -92,7 +108,8 @@ int main(int argc, char** argv)
             std::printf("t_mono_s,range_m,amp,temp_c,status\n");
         }
         r.start(p);
-        std::fprintf(stderr, "TF-Luna %s on %s, %u Hz\n", r.version().c_str(), p.port.c_str(), r.rate_hz());
+        std::fprintf(stderr, "TF-Luna %s on %s, %u Hz%s\n", r.version().c_str(), r.where().c_str(), r.rate_hz(),
+                     p.save_settings ? ", settings saved in the sensor" : "");
         const auto t0 = std::chrono::steady_clock::now();
         while (!g_stop) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -108,8 +125,13 @@ int main(int argc, char** argv)
                          static_cast<unsigned long long>(s.n_status[static_cast<size_t>(Status::TooClose)]),
                          static_cast<unsigned long long>(s.n_status[static_cast<size_t>(Status::TooFar)]),
                          static_cast<unsigned long long>(s.n_bad_sum));
+            if (r.i2c())
+                std::fprintf(stderr, "  i2c since start: bus errors %llu, missed %llu, no data ready %llu, same tick %llu\n",
+                             static_cast<unsigned long long>(s.n_bus_err), static_cast<unsigned long long>(s.n_late),
+                             static_cast<unsigned long long>(s.n_no_drdy),
+                             static_cast<unsigned long long>(s.n_same_tick));
             std::fflush(stdout);
-            if (r.gone()) throw std::runtime_error("the port went away");
+            if (r.gone()) throw std::runtime_error(r.i2c() ? "the sensor stopped answering" : "the port went away");
             if (seconds > 0 && std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() >= seconds)
                 break;
         }

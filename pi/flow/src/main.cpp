@@ -19,6 +19,8 @@
 //                                     shown in --dry-run, the 5 s line and the
 //                                     preview page; with --tm171 it is the
 //                                     height the velocity is scaled by)
+//   flow ... --lidar-i2c /dev/i2c-7 --lidar-drdy gpiochip2:11
+//                                     the same TF-Luna in I2C mode
 //   flow ... --tm171 /dev/ttyACM2     front camera unit: de-rotate each frame
 //                                     pair with the TM171 gyro here and send
 //                                     FLOW_MSG_CAM_VEL (camera velocity and
@@ -158,6 +160,7 @@ struct Args {
     bool        preview = FLOW_PREVIEW_DEFAULT;  // camera preview web page
     int         preview_port = 8080;
     std::string lidar;  // TF-Luna serial port, "" for none
+    std::string lidar_i2c, lidar_drdy;  // or its I2C bus and pin 6's GPIO
     unsigned    lidar_baud = 115200;
     unsigned    lidar_rate = 100;
     bool        lidar_cm = false;
@@ -165,6 +168,7 @@ struct Args {
     std::string lidar_log;  // CSV of every TF-Luna sample
     std::string tm171;      // TM171 serial port, "" for none
     bool        tm171_save = false;
+    unsigned    tm171_baud = 115200;  // on a UART; no effect on its USB port
     double      cam_yaw_deg = 0;  // image top from the TM171's forward, clockwise from above
     double      height_m = 1.0;   // lens above level ground when there is no range
 };
@@ -178,9 +182,11 @@ void usage()
                  "            [--calib FILE.json] [--corners N] [--loop] [--realtime] [--threads N]\n"
                  "            [--v4l2] [--video DEV] [--subdev DEV] [--no-phase] [--phase-min R]\n"
                  "            [--preview | --no-preview] [--preview-port N]\n"
-                 "            [--lidar DEV] [--lidar-baud N] [--lidar-rate HZ] [--lidar-cm]\n"
+                 "            [--lidar DEV | --lidar-i2c DEV --lidar-drdy CHIP:LINE]\n"
+                 "            [--lidar-baud N] [--lidar-rate HZ] [--lidar-cm]\n"
                  "            [--lidar-device-filter] [--lidar-log FILE.csv]\n"
-                 "            [--tm171 DEV] [--tm171-save] [--cam-yaw DEG] [--height M]\n"
+                 "            [--tm171 DEV] [--tm171-baud N] [--tm171-save] [--cam-yaw DEG]\n"
+                 "            [--height M]\n"
                  "  --usb: --port is the Pico's USB port (/dev/ttyACM0): each frame goes as a\n"
                  "         \"flow <hex>\" line and the Pico's output is copied to stdout; for\n"
                  "         bench tests before the link UART is wired (without --triggered the\n"
@@ -210,6 +216,9 @@ void usage()
                  "         frame gets the median valid range within 2.5 lidar intervals of its\n"
                  "         time, else the last one up to 0.5 s old. --lidar-log writes every\n"
                  "         sample\n"
+                 "  --lidar-i2c DEV --lidar-drdy CHIP:LINE: the TF-Luna in I2C mode instead (pin\n"
+                 "         5 at GND), its pin 6 on that GPIO (gpiochip2:11 = ROCK 4SE header pin\n"
+                 "         7); cm only, its own filters stay as saved over UART (tfluna --save)\n"
                  "  With --udp or --usb the Pico sends the unit's settings once a second\n"
                  "         (FLOW_MSG_UNIT_CFG: camera height, image direction, TM171 mounting);\n"
                  "         from the first one on they replace --height and --cam-yaw\n"
@@ -220,7 +229,10 @@ void usage()
                  "         else --height (default 1.0 m), tilt-corrected with its roll and pitch.\n"
                  "         --cam-yaw is the image top from the TM171's x axis, clockwise seen\n"
                  "         from above (default 0). A frame its gyro doesn't cover goes as the raw\n"
-                 "         displacement (FLOW_MSG_FLOW). Not with --frames\n");
+                 "         displacement (FLOW_MSG_FLOW). Not with --frames\n"
+                 "  --tm171-baud N: its rate on a UART (default 115200, as ours was delivered;\n"
+                 "         ours has 921600 saved, which the 800 Hz output needs). A new rate\n"
+                 "         only takes effect from flash after a power cycle. No effect on USB\n");
 }
 
 Args parse(int argc, char** argv)
@@ -270,6 +282,8 @@ Args parse(int argc, char** argv)
             else if (k == "--no-phase") a.phase = false;
             else if (k == "--phase-min") a.phase_min_resp = std::stod(val());
             else if (k == "--lidar") a.lidar = val();
+            else if (k == "--lidar-i2c") a.lidar_i2c = val();
+            else if (k == "--lidar-drdy") a.lidar_drdy = val();
             else if (k == "--lidar-baud") a.lidar_baud = static_cast<unsigned>(std::stoul(val()));
             else if (k == "--lidar-rate") a.lidar_rate = static_cast<unsigned>(std::stoul(val()));
             else if (k == "--lidar-cm") a.lidar_cm = true;
@@ -277,6 +291,7 @@ Args parse(int argc, char** argv)
             else if (k == "--lidar-log") a.lidar_log = val();
             else if (k == "--tm171") a.tm171 = val();
             else if (k == "--tm171-save") a.tm171_save = true;
+            else if (k == "--tm171-baud") a.tm171_baud = static_cast<unsigned>(std::stoul(val()));
             else if (k == "--cam-yaw") a.cam_yaw_deg = std::stod(val());
             else if (k == "--height") a.height_m = std::stod(val());
             else if (k == "--preview") a.preview = true;
@@ -487,16 +502,19 @@ int main(int argc, char** argv)
 
         // The TF-Luna: asked for, so not finding it is an error.
         flow::tfluna::Reader lidar;
-        if (!a.lidar.empty()) {
+        if (!a.lidar.empty() && !a.lidar_i2c.empty()) throw std::runtime_error("--lidar or --lidar-i2c, not both");
+        if (!a.lidar.empty() || !a.lidar_i2c.empty()) {
             flow::tfluna::ReaderParams lp;
             lp.port = a.lidar;
+            lp.i2c_dev = a.lidar_i2c;
+            lp.drdy = a.lidar_drdy;
             lp.baud = a.lidar_baud;
             lp.rate_hz = a.lidar_rate;
             lp.mm = !a.lidar_cm;
             lp.device_filter = a.lidar_device_filter;
             lp.log_path = a.lidar_log;
             lidar.start(lp);
-            std::fprintf(stderr, "TF-Luna %s on %s, %u Hz\n", lidar.version().c_str(), a.lidar.c_str(),
+            std::fprintf(stderr, "TF-Luna %s on %s, %u Hz\n", lidar.version().c_str(), lidar.where().c_str(),
                          lidar.rate_hz());
             pv.lidar = true;
         }
@@ -578,6 +596,7 @@ int main(int argc, char** argv)
             flow::tm171::ReaderParams ip;
             ip.port = a.tm171;
             ip.save_flash = a.tm171_save;
+            ip.baud = a.tm171_baud;
             imu.start(ip);
             std::fprintf(stderr, "TM171 node %u on %s, settings %s\n", imu.node_id(), a.tm171.c_str(),
                          imu.setup().c_str());
@@ -723,7 +742,7 @@ int main(int argc, char** argv)
             flow::tfluna::Range rng;
             if (lidar.running()) {
                 if (lidar.gone() && !lidar_gone_told) {
-                    std::fprintf(stderr, "TF-Luna: %s went away, no more ranges\n", a.lidar.c_str());
+                    std::fprintf(stderr, "TF-Luna: %s went away, no more ranges\n", lidar.where().c_str());
                     lidar_gone_told = true;
                 }
                 const int64_t t = folder ? flow::tfluna::Reader::now_ns() : f.mid_ns;

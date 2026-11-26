@@ -8,6 +8,7 @@ The Pico firmware's modules and drivers. This loads with the root `CLAUDE.md` (a
 - `nav_core1.c`: the filter on core 1 and its queues.
 - `cpu_load.h`: header-only load meter for both cores' polling loops, timed with each core's SysTick because the M33 has no DWT cycle counter. Each loop flags its work passes, and idle passes are charged the mean of the typical idle pass. Shown as the `CPU` lines and `cpu` in `/status.json`. A FreeRTOS move would take the SysTick, so switch to its idle hook then.
 - `die_temp.c`: the RP2350's on-chip temperature sensor on the internal ADC input, read with the status report. Uncalibrated, so a few degrees off. Nothing else uses the ADC, and ADC input 3 / GP29 must never be read because the CYW43439 shares it.
+- `reset_reason.c`: why the chip last reset (watchdog reason, POWMAN CHIP_RESET, a warm-reset marker in RAM), read once at boot for `reset` in `/status.json` and the USB banner. `fw_version.h`: the git version and commit date, generated at every build by `tools/fw_version.cmake` (`fw`, `fw_date`).
 - `app_config.h`: mounting, noise figures, options.
 - `settings.c`: web-page settings in flash, including the sensors fitted (barometer, magnetometer, optical flow, wheel pulses), each on/off and applied live. New fields are appended and `settings_load()` migrates older records by size.
 - `flash_rec.c`: the two-sector flash record both use.

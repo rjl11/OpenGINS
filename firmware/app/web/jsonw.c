@@ -103,6 +103,16 @@ void jw_num(jw_t *w, const char *key, double v, int decimals)
     }
 }
 
+void jw_numg(jw_t *w, const char *key, double v)
+{
+    prefix(w, key);
+    if (isfinite(v)) {
+        out(w, "%g", v);
+    } else {
+        out(w, "null");
+    }
+}
+
 void jw_int(jw_t *w, const char *key, long long v)
 {
     prefix(w, key);

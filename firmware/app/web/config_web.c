@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "pico/platform/sections.h"
+
 #include "app_config.h"
 #include "imu_calib.h"
 #include "pole_mount.h"
@@ -16,8 +18,91 @@
  * inside web_locked(). */
 static settings_t s_base;          /* settings in use, the start of a save */
 static config_cmd_t s_pending;     /* kind NONE = free */
+static uint32_t s_pending_rid;     /* its request ID, 0 = none */
+/* Taken by the main loop and not yet reported by config_web_publish(): no
+ * new command is accepted meanwhile, so a save never starts from settings
+ * that the one before it is still changing (s_base is set at that publish). */
+static bool s_running;
+static uint32_t s_running_rid;
 
-static uint32_t s_result_seq;      /* main loop only */
+/* The commands accepted lately, by request ID (rid, common.js) and a hash of
+ * the rest of the form: a page that got no answer sends the same form with
+ * the same ID again, and that one is answered as a repeat instead of being
+ * queued twice. Kept in RAM that a reboot leaves alone (as reset_reason.c's
+ * marker), so a reboot command retried after the unit is back is not run
+ * again. ran: its result was reported; one accepted but not run when the
+ * unit reset is forgotten at boot, so its retry runs it. result_seq is this
+ * boot's last_result seq of its outcome, 0 = not yet or from before the
+ * reboot. */
+#define RID_KEEP 8
+#define RID_MAGIC 0x52494432u
+typedef struct {
+    uint32_t rid, hash, result_seq, ran;
+} rid_rec_t;
+typedef struct {
+    uint32_t magic;
+    uint32_t next;
+    rid_rec_t r[RID_KEEP];
+    uint32_t check;
+} rid_log_t;
+static rid_log_t __uninitialized_ram(s_rids);
+
+static uint32_t rid_check(void)
+{
+    const uint32_t *w = (const uint32_t *)&s_rids;
+    uint32_t c = 0x9E3779B9u;
+    for (size_t i = 0; i < offsetof(rid_log_t, check) / 4; i++) c = (c ^ w[i]) * 16777619u;
+    return c;
+}
+
+static void rid_init(void)
+{
+    if (s_rids.magic != RID_MAGIC || s_rids.check != rid_check() || s_rids.next >= RID_KEEP) {
+        memset(&s_rids, 0, sizeof s_rids);
+        s_rids.magic = RID_MAGIC;
+    }
+    for (int i = 0; i < RID_KEEP; i++) {
+        if (!s_rids.r[i].ran) s_rids.r[i].rid = 0; /* accepted, never run */
+        s_rids.r[i].result_seq = 0;                /* last boot's seqs */
+    }
+    s_rids.check = rid_check();
+}
+
+static rid_rec_t *rid_find(uint32_t rid, uint32_t hash)
+{
+    if (rid == 0) return NULL;
+    for (int k = 1; k <= RID_KEEP; k++) { /* newest first */
+        rid_rec_t *r = &s_rids.r[(s_rids.next + RID_KEEP - k) % RID_KEEP];
+        if (r->rid == rid && r->hash == hash) return r;
+    }
+    return NULL;
+}
+
+static void rid_add(uint32_t rid, uint32_t hash)
+{
+    if (rid == 0) return;
+    s_rids.r[s_rids.next] = (rid_rec_t){ rid, hash, 0, 0 };
+    s_rids.next = (s_rids.next + 1) % RID_KEEP;
+    s_rids.check = rid_check();
+}
+
+/* FNV-1a of one decoded field "key=value"; the form's hash is the sum of
+ * its fields' (rid left out), so the same fields in another order match. */
+static uint32_t fnv(uint32_t h, const char *s)
+{
+    for (; *s; s++) h = (h ^ (uint8_t)*s) * 16777619u;
+    return h;
+}
+
+static uint32_t field_hash(const char *k, const char *v)
+{
+    uint32_t h = fnv(fnv(fnv(2166136261u, k), "="), v);
+    h ^= h >> 15; /* spread before summing */
+    return h * 0x2C1B3C6Du;
+}
+
+static uint32_t s_result_seq;      /* written in web_locked() only */
+static uint32_t s_result_rid;      /* the request ID of that result, 0 = none */
 static char s_result[160] = "none";
 
 /* ---- form parsing (lwIP context) ------------------------------------------ */
@@ -257,7 +342,7 @@ static const char *apply_field(settings_t *s, const char *key, const char *val, 
         snprintf(dst, max + 1, "%s", val);
         return NULL;
     }
-    if (strcmp(key, "action") == 0) {
+    if (strcmp(key, "action") == 0 || strcmp(key, "rid") == 0) {
         return NULL;
     }
     snprintf(err, cap, "unknown field: %.40s", key);
@@ -292,15 +377,22 @@ static void post_handler(const char *uri, const char *body, size_t len, char *ou
     /* First pass: the action. */
     config_cmd_kind_t kind = CFG_CMD_NONE;
     const char *action = "";
+    uint32_t rid = 0;
     form_t f = { buf, len, 0 };
     char *k, *v;
     static char copy[WEB_POST_MAX + 1];
     memcpy(copy, buf, len + 1);
     form_t f2 = { copy, len, 0 };
+    uint32_t hash = 0;
     while (form_next(&f2, &k, &v)) {
+        if (strcmp(k, "rid") == 0) {
+            rid = (uint32_t)strtoul(v, NULL, 10);
+            continue;
+        }
         if (strcmp(k, "action") == 0) {
             action = v;
         }
+        hash += field_hash(k, v);
     }
     if (strcmp(action, "save") == 0) kind = CFG_CMD_SAVE;
     else if (strcmp(action, "defaults") == 0) kind = CFG_CMD_DEFAULTS;
@@ -314,7 +406,27 @@ static void post_handler(const char *uri, const char *body, size_t len, char *ou
                                           "reconfigure_gnss, reconfigure_imu, calib_reset or calib");
         return;
     }
-    if (s_pending.kind != CFG_CMD_NONE) {
+    /* A repeat of a command accepted lately (same ID and form): not queued
+     * again. "repeat" says whether it is still to run ("pending") or done,
+     * with its last_result seq when that was in this boot (common.js). */
+    const rid_rec_t *seen = rid_find(rid, hash);
+    if (seen != NULL) {
+        const bool pending = (s_pending.kind != CFG_CMD_NONE && s_pending_rid == rid) || (s_running && s_running_rid == rid);
+        char rb[160];
+        jw_t w;
+        jw_init(&w, rb, sizeof rb);
+        jw_obj(&w, NULL);
+        jw_bool(&w, "ok", true);
+        jw_str(&w, "queued", action);
+        jw_str(&w, "repeat", pending ? "pending" : "done");
+        if (!pending && seen->result_seq != 0) jw_int(&w, "result_seq", seen->result_seq);
+        jw_end(&w, '}');
+        size_t n = w.len < cap ? w.len : cap;
+        memcpy(out, rb, n);
+        *out_len = n;
+        return;
+    }
+    if (s_pending.kind != CFG_CMD_NONE || s_running) {
         *out_len = reply(out, cap, false, "busy: the previous command is still running");
         return;
     }
@@ -370,10 +482,16 @@ static void post_handler(const char *uri, const char *body, size_t len, char *ou
         }
     }
     s_pending = cmd;
+    s_pending_rid = rid;
+    rid_add(rid, hash);
     *out_len = reply(out, cap, true, action);
 }
 
-void config_web_init(void) { web_set_post_handler(post_handler); }
+void config_web_init(void)
+{
+    rid_init();
+    web_set_post_handler(post_handler);
+}
 
 /* ---- main loop -------------------------------------------------------------- */
 
@@ -381,6 +499,10 @@ static void take_locked(void *arg)
 {
     config_cmd_t *cmd = arg;
     *cmd = s_pending;
+    if (s_pending.kind != CFG_CMD_NONE) {
+        s_running = true;
+        s_running_rid = s_pending_rid;
+    }
     s_pending.kind = CFG_CMD_NONE;
 }
 
@@ -393,7 +515,35 @@ bool config_web_take(config_cmd_t *cmd)
     return cmd->kind != CFG_CMD_NONE;
 }
 
-static void set_base_locked(void *arg) { s_base = *(const settings_t *)arg; }
+typedef struct {
+    const settings_t *cur;
+    bool result;
+} publish_arg_t;
+
+/* The settings in use; with a result, the running command is done: its
+ * request ID gets the result's seq, and the next command may be accepted. */
+static void publish_locked(void *arg)
+{
+    const publish_arg_t *a = arg;
+    s_base = *a->cur;
+    if (!a->result) return;
+    s_result_seq++;
+    if (s_running) {
+        for (int k = 1; k <= RID_KEEP; k++) { /* the newest with that ID */
+            rid_rec_t *r = &s_rids.r[(s_rids.next + RID_KEEP - k) % RID_KEEP];
+            if (s_running_rid != 0 && r->rid == s_running_rid) {
+                r->result_seq = s_result_seq;
+                r->ran = 1;
+                s_rids.check = rid_check();
+                break;
+            }
+        }
+        s_result_rid = s_running_rid;
+        s_running = false;
+    } else {
+        s_result_rid = 0;
+    }
+}
 
 static const char *wifi_mode_name(uint8_t m)
 {
@@ -467,11 +617,11 @@ void config_web_publish(const settings_t *cur, const settings_t *boot, bool from
     static settings_t defaults;
     jw_t w;
 
-    web_locked(set_base_locked, (void *)cur);
     if (result != NULL) {
         snprintf(s_result, sizeof s_result, "%s", result);
-        s_result_seq++;
     }
+    publish_arg_t pa = { cur, result != NULL };
+    web_locked(publish_locked, &pa);
     settings_defaults(&defaults);
 
     jw_init(&w, buf, sizeof buf);
@@ -480,6 +630,16 @@ void config_web_publish(const settings_t *cur, const settings_t *boot, bool from
     jw_int(&w, "seq", settings_seq());
     settings_obj(&w, "settings", cur);
     settings_obj(&w, "defaults", &defaults);
+    /* The limits settings_validate() checks, so the page marks a bad value
+     * before posting. */
+    jw_obj(&w, "range");
+    for (unsigned i = 0; i < settings_n_ranges; i++) {
+        jw_arr(&w, settings_ranges[i].key);
+        jw_numg(&w, NULL, (double)settings_ranges[i].lo);
+        jw_numg(&w, NULL, (double)settings_ranges[i].hi);
+        jw_end(&w, ']');
+    }
+    jw_end(&w, '}');
     jw_arr(&w, "reboot_pending");
     if (cur->antenna_dual != boot->antenna_dual) jw_str(&w, NULL, "antenna");
     if (settings_platform(cur) != settings_platform(boot)) jw_str(&w, NULL, "platform");
@@ -489,6 +649,7 @@ void config_web_publish(const settings_t *cur, const settings_t *boot, bool from
     jw_end(&w, ']');
     jw_obj(&w, "last_result");
     jw_int(&w, "seq", s_result_seq);
+    jw_int(&w, "rid", s_result_rid);
     jw_str(&w, "text", s_result);
     jw_end(&w, '}');
     jw_end(&w, '}');

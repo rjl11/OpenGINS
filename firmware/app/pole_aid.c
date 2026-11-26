@@ -147,6 +147,16 @@ static void fit_clear(pole_aid_t *p)
 
 void pole_aid_set_geometry(pole_aid_t *p, bool active, const float tip_b[3], const float ant_b[3])
 {
+    /* A new tip (antenna height) while planted: the latched tip position was
+     * taken with the old one, so the episode ends here and the next plant
+     * latches it again; the filter keeps running. */
+    bool moved = false;
+    for (int i = 0; i < 3; i++) moved |= p->tip_b[i] != tip_b[i] || p->ant_b[i] != ant_b[i];
+    if (moved) {
+        p->st.planted = p->st.latched = false;
+        p->latch_wanted = false;
+        fit_clear(p);
+    }
     for (int i = 0; i < 3; i++) {
         p->tip_b[i] = tip_b[i];
         p->ant_b[i] = ant_b[i];

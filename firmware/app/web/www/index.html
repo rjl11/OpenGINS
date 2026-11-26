@@ -5,17 +5,9 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#111316">
 <title>OpenGINS</title>
+<link rel="stylesheet" href="/common.css">
 <style>
-:root{--bg:#f2f3f5;--card:#fff;--fg:#15181c;--dim:#646b75;--line:#dfe2e6;
---ok:#15803d;--okb:#dcfce7;--warn:#a16207;--warnb:#fef3c7;--bad:#b91c1c;--badb:#fee2e2;--off:#6b7280;--offb:#eceef1}
-@media (prefers-color-scheme:dark){:root{--bg:#0e1013;--card:#1a1d22;--fg:#eceef1;--dim:#9aa1ab;--line:#2a2e35;
---ok:#4ade80;--okb:#12301d;--warn:#fbbf24;--warnb:#3a2d0a;--bad:#f87171;--badb:#3b1414;--off:#8b929c;--offb:#24272d}}
-*{box-sizing:border-box}
-html{-webkit-text-size-adjust:100%}
-body{margin:0;padding:12px 16px 24px;background:var(--bg);color:var(--fg);font:16px/1.35 system-ui,sans-serif}
-.num{font-variant-numeric:tabular-nums}
-header{display:flex;align-items:center;gap:10px;margin-bottom:12px}
-header h1{font-size:18px;margin:0;flex:1}
+body{font-size:16px;line-height:1.35}
 header .up{color:var(--dim);font-size:14px}
 .pill{font-weight:700;font-size:14px;padding:4px 10px;border-radius:999px}
 .card{background:var(--card);border:1px solid var(--line);border-left-width:8px;border-radius:12px;padding:12px 14px;margin-bottom:12px}
@@ -30,7 +22,11 @@ header .up{color:var(--dim);font-size:14px}
 .bad{border-left-color:var(--bad)}.bad .big,.bad .st{color:var(--bad)}
 .off{border-left-color:var(--off)}.off .big,.off .st{color:var(--off)}
 .pill.ok{background:var(--okb);color:var(--ok)}.pill.bad{background:var(--badb);color:var(--bad)}
+.alert{padding:8px 12px;margin-bottom:10px;border-radius:10px;font-weight:600;font-size:15px;border:1px solid var(--line);border-left-width:8px}
+.alert.warn{background:var(--warnb);color:var(--warn);border-left-color:var(--warn)}
+.alert.off{background:var(--offb);color:var(--off);border-left-color:var(--off)}
 .pos{font-size:20px;font-weight:700;cursor:pointer}
+.copied{font-size:13px;font-weight:600;color:var(--ok);margin-left:6px;text-transform:none;letter-spacing:0}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
 .chip{background:var(--card);border:1px solid var(--line);border-left-width:8px;border-radius:12px;padding:10px 12px;min-width:0}
 .chip .n{font-size:14px;color:var(--dim)}
@@ -40,15 +36,14 @@ header .up{color:var(--dim);font-size:14px}
 .bad.chip{background:var(--badb);border-left-color:var(--bad)}.off.chip{background:var(--offb);border-left-color:var(--off)}
 .stale .card,.stale .chip{opacity:.45;filter:grayscale(1)}
 footer{color:var(--dim);font-size:14px;text-align:center}
-nav{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
-nav a{display:flex;align-items:center;justify-content:center;min-height:48px;border-radius:10px;background:var(--card);border:1px solid var(--line);color:var(--fg);text-decoration:none;font-weight:600}
 </style>
 </head>
 <body>
 <header><h1>OpenGINS</h1><span class="up num" id="up"></span><span class="pill bad" id="age">…</span></header>
+<nav class="tabs"><a href="/" aria-current="page">Status</a><a href="/status.html">Details</a><a href="/config.html">Config</a><a href="/calib.html">Calibration</a></nav>
 <div id="main"><div class="card off"><div class="big">connecting…</div></div></div>
-<footer><div id="cpu" class="num"></div>
-<nav><a href="/status.html">Details</a><a href="/config.html">Config</a><a href="/calib.html">Calibration</a></nav></footer>
+<footer><div id="cpu" class="num"></div><div id="fw"></div></footer>
+<script src="/common.js"></script>
 <script>
 "use strict";
 let last=0,cur=null;
@@ -81,6 +76,13 @@ function navCard(n){
   const r=n.rpy_deg;
   const rows=[["att",n.attitude_from||"—"]];
   if(Array.isArray(r))rows.push(["roll",f(r[0],1,"°")],["pitch",f(r[1],1,"°")],["yaw",f(r[2],1,"°")]);
+  const v=n.vel_ned_mps;
+  if(Array.isArray(v)){
+    const sp=Math.hypot(v[0],v[1]);
+    rows.push(["speed",f(sp*3.6,1," km/h")]);
+    /* Below 0.5 m/s the course is mostly noise. */
+    if(sp>=0.5)rows.push(["course",f((Math.atan2(v[1],v[0])*180/Math.PI+360)%360,0,"°")]);
+  }
   if(n.standing_still)rows.push(["","standing still"]);
   return card(c,"Filter (INSLIB)",m==="ATTITUDE_ONLY"?"ATTITUDE":(m||"—"),rows,n.imu_lost?'<div class="banner">IMU lost: filter stopped</div>':"");
 }
@@ -94,56 +96,100 @@ function posCard(p){
     rows.map(([k,v])=>'<i>'+E(k)+' <b>'+E(v)+'</b></i>').join("")+'</div></div>';
 }
 function sensors(d){
-  const o=[],i=d.imu,g=d.gnss,b=d.baro,m=d.mag,s=d.speed,fl=d.flow,w=d.wifi,e=d.eth,pl=d.pole,h=d.heading,c=d.calib;
-  if(i)o.push(i.state==="run"&&i.error==="ok"?chip("ok","IMU","OK",i.rate_hz+" Hz"+(has(i.temp_c)?" · "+f(i.temp_c,0,"°C"):"")):
+  const o=[],add=(k,x)=>o.push([k,x]),i=d.imu,g=d.gnss,b=d.baro,m=d.mag,s=d.speed,fl=d.flow,w=d.wifi,e=d.eth,pl=d.pole,h=d.heading,c=d.calib;
+  if(i)add("imu",i.state==="run"&&i.error==="ok"?chip("ok","IMU","OK",i.rate_hz+" Hz"+(has(i.temp_c)?" · "+f(i.temp_c,0,"°C"):"")):
     chip(i.state==="error"||(i.error&&i.error!=="ok")?"bad":"warn","IMU",i.state,i.error!=="ok"?i.error:"starting"));
-  else o.push(chip("bad","IMU","—"));
-  if(g)o.push(g.state==="run"?chip(g.dual_refused?"warn":"ok","GNSS receiver","OK",(g.model||"")+" · "+g.rate_hz+" Hz"+(g.dual_refused?" · dual refused":"")):
+  else add("imu",chip("bad","IMU","—"));
+  if(g)add("gnssrx",g.state==="run"?chip(g.dual_refused?"warn":"ok","GNSS receiver","OK",(g.model||"")+" · "+g.rate_hz+" Hz"+(g.dual_refused?" · dual refused":"")):
     chip(g.error&&g.error!=="ok"?"bad":"warn","GNSS receiver",g.state,g.error!=="ok"?g.error:"starting"));
-  if(h)o.push(chip(h.fix==="rtk-fixed"?"ok":"warn","GNSS heading",f(h.heading_deg,1,"°"),h.fix+" · ±"+f(h.sd_deg,1,"°")));
-  if(b)o.push(!b.enabled?chip("off","Barometer","off","not fitted"):!b.found?chip("bad","Barometer","missing","not found on I2C"):
+  if(h)add("heading",chip(h.fix==="rtk-fixed"?"ok":"warn","GNSS heading",f(h.heading_deg,1,"°"),h.fix+" · ±"+f(h.sd_deg,1,"°")));
+  if(b)add("baro",!b.enabled?chip("off","Barometer","off","not fitted"):!b.found?chip("bad","Barometer","missing","not found on I2C"):
     chip(b.rate_hz>0?"ok":"bad","Barometer",b.rate_hz>0?"OK":"no data",b.rate_hz+" Hz · "+f(b.pressure_pa/100,1," hPa")));
   if(m){
-    if(m.reason)o.push(chip("warn","Magnetometer",m.state==="withheld"?"withheld":"untrusted",m.reason));
-    else if(m.state==="run")o.push(chip("ok","Magnetometer","OK",f(m.field_ut,0," µT")+" · "+(m.north==="true"?"true N":"mag N")));
-    else o.push(chip("off","Magnetometer","off",""));
+    if(m.reason)add("mag",chip("warn","Magnetometer",m.state==="withheld"?"withheld":"untrusted",m.reason));
+    else if(m.state==="run")add("mag",chip("ok","Magnetometer","OK",f(m.field_ut,0," µT")+" · "+(m.north==="true"?"true N":"mag N")));
+    else add("mag",chip("off","Magnetometer","off",""));
   }
-  if(s)o.push(!s.enabled?chip("off","Wheel speed","off","not fitted"):chip(s.a_hz>0?"ok":"warn","Wheel speed",s.a_hz>0?"pulses":"no pulses",f(s.a_hz,0," Hz")+(s.direction?" · "+s.direction:"")));
-  if(fl)o.push(!fl.enabled?chip("off","Optical flow","off","not fitted"):!fl.link?chip("bad","Optical flow","no link","Pi not sending"):
+  if(s)add("wheel",!s.enabled?chip("off","Wheel speed","off","not fitted"):chip(s.a_hz>0?"ok":"warn","Wheel speed",s.a_hz>0?"pulses":"no pulses",f(s.a_hz,0," Hz")+(s.direction?" · "+s.direction:"")));
+  if(fl)add("flow",!fl.enabled?chip("off","Optical flow","off","not fitted"):!fl.link?chip("bad","Optical flow","no link","Pi not sending"):
     chip(fl.frames_hz>0?"ok":"warn","Optical flow",fl.frames_hz>0?"OK":"no frames",f(fl.frames_hz,0," fps")+(has(fl.features)?" · "+fl.features+" feat":"")));
-  if(w)o.push(chip(w.state==="up"||w.state==="ap"?"ok":"warn","Wi-Fi",w.state==="ap"?"AP":w.state,
+  if(w)add("wifi",chip(w.state==="up"||w.state==="ap"?"ok":"warn","Wi-Fi",w.state==="ap"?"AP":w.state,
     w.state==="ap"?(w.ap_clients||0)+" client(s)":has(w.rssi_dbm)?w.rssi_dbm+" dBm":w.ssid||""));
-  if(e&&e.state!=="off")o.push(e.state==="up"?chip(e.paogi_errors>e.paogi_sent/100?"warn":"ok","Ethernet","up",e.ip+(has(e.rtcm_age_ms)&&e.rtcm_age_ms<3000?" · RTCM in":"")):
+  if(e&&e.state!=="off")add("eth",e.state==="up"?chip(e.paogi_errors>e.paogi_sent/100?"warn":"ok","Ethernet","up",e.ip+(has(e.rtcm_age_ms)&&e.rtcm_age_ms<3000?" · RTCM in":"")):
     chip(e.state==="not_found"?"bad":"warn","Ethernet",e.state==="not_found"?"missing":"no link",e.state==="not_found"?"W5500 not answering":"no cable"));
-  if(e&&has(e.front_age_ms)&&e.front_age_ms<5000&&e.front_from)o.push('<a class="chip ok" style="color:inherit;text-decoration:none" target="_blank" href="http://'+E(e.front_from)+':8080/">'+
+  if(e&&has(e.front_age_ms)&&e.front_age_ms<5000&&e.front_from)add("front",'<a class="chip ok" style="color:inherit;text-decoration:none" target="_blank" href="http://'+E(e.front_from)+':8080/">'+
     '<div class="n">Front camera</div><div class="st">preview ›</div><div class="d num">'+E(e.front_from)+(e.sync_valid?" · synced":"")+' · from Ethernet only</div></a>');
-  if(pl)o.push(chip(pl.state==="held"?"ok":pl.state==="planted"?"warn":"off","Pole",pl.state,pl.plants+" plants · "+pl.yaw_fits+" yaw fits"));
+  if(pl)add("pole",chip(pl.state==="held"?"ok":pl.state==="planted"?"warn":"off","Pole",pl.state,pl.plants+" plants · "+pl.yaw_fits+" yaw fits"));
   if(c){const k=["gyro_bias","accelerometer","magnetometer","gyro_matrix"],n=k.filter(x=>String(c[x]||"").startsWith("in use")).length;
-    o.push(chip(c.imu_id!=="ok"?"warn":n?"ok":"off","Calibration",n+" / 4 in use",c.imu_id==="ok"?(c.still?"still":"moving"):"IMU id "+c.imu_id));}
-  return '<div class="grid">'+o.join("")+'</div>';
+    add("calib",chip(c.imu_id!=="ok"?"warn":n?"ok":"off","Calibration",n+" / 4 in use",c.imu_id==="ok"?(c.still?"still":"moving"):"IMU id "+c.imu_id));}
+  const r=d.corrections;
+  if(r){
+    const a=r.active,src=a&&r[a],age=src&&has(src.age_ms)?src.age_ms/1000:null;
+    /* The receiver may get RTCM on another of its ports (COM3 from a PC,
+     * COM2 from the companion): its own correction age says so. */
+    const rx=g&&g.state==="run"&&/^(rtk|dgps|ppp)/.test(g.fix||"")&&has(g.age_s)&&g.age_s>=0;
+    add("corr",a?chip(age!==null&&age<3?"ok":"warn","Corrections",a==="ethernet"?"Ethernet":"Bluetooth",
+        (age!==null?f(age,1," s ago"):"no frame yet")+" · "+src.frames+" frames"):
+      rx?chip(g.age_s<5?"ok":"warn","Corrections","receiver",f(g.age_s,1," s old")+" · on another receiver port, not through this unit"):
+      chip("off","Corrections","none",r.mode==="auto"?"no RTCM from Bluetooth or Ethernet":"no RTCM from "+r.mode));
+  }
+  /* What this platform needs first moves to the top; the rest keeps its order. */
+  const pri=CHIP_FIRST[d.platform]||CHIP_DEFAULT,rank=k=>{const x=pri.indexOf(k);return x<0?pri.length:x;};
+  o.sort((x,y)=>rank(x[0])-rank(y[0]));
+  return '<div class="grid">'+o.map(x=>x[1]).join("")+'</div>';
+}
+/* Card and chip order by the platform in effect since boot ("platform" in
+ * /status.json): what the operator looks at first goes on top. */
+const CARDS={pole:["pos","gnss","nav"],multirotor:["nav","gnss","pos"],fixed_wing:["nav","gnss","pos"]};
+const CHIP_FIRST={tractor:["gnssrx","heading","corr","eth","imu"],pole:["pole","gnssrx","corr","imu"],
+  multirotor:["imu","baro","gnssrx","corr","flow"],fixed_wing:["imu","baro","gnssrx","corr"]};
+const CHIP_DEFAULT=["imu","gnssrx","heading","corr"];
+/* Warnings the operator must see whichever card they look at. The filter
+ * restart shows for 15 s after "reinits" counts up; the reboot-pending and
+ * build-default lines come from /config.json, read every 15 s. */
+let reinits=null,restartAt=0,conf=null;
+function banners(d){
+  const o=[],n=d.nav||{},g=d.gnss||{},i=d.imu||{};
+  /* since_reinit_s from the unit, so a page opened just after a restart
+   * shows it too; the counter also catches one between two polls. */
+  if(has(n.since_reinit_s))restartAt=Math.max(restartAt,Date.now()-n.since_reinit_s*1000);
+  if(has(n.reinits)){if(reinits!==null&&n.reinits>reinits)restartAt=Math.max(restartAt,Date.now());reinits=n.reinits;}
+  if(Date.now()-restartAt<15000)o.push(["warn","Filter restarted after a settings change: aligning again"]);
+  if(i.source&&i.source!=="roof")o.push(["warn","Backup IMU in use (front unit TM171): roof IMU lost"]);
+  if(g.dual_refused)o.push(["warn","Dual antenna set, but the receiver can't: running single antenna"]);
+  if(conf&&conf.reboot_pending&&conf.reboot_pending.length)o.push(["warn","Reboot to apply: "+conf.reboot_pending.join(", ")]);
+  if(conf&&conf.source&&conf.source!=="flash")o.push(["off","Settings are the build defaults (nothing saved)"]);
+  return o.map(([c,t])=>'<div class="alert '+c+'">'+E(t)+'</div>').join("");
 }
 function render(d){
   cur=d;
-  document.getElementById("main").innerHTML=gnssCard(d.gnss)+navCard(d.nav)+posCard(d.position)+sensors(d);
+  const parts={gnss:gnssCard(d.gnss),nav:navCard(d.nav),pos:posCard(d.position)};
+  document.getElementById("main").innerHTML=banners(d)+(CARDS[d.platform]||["gnss","nav","pos"]).map(k=>parts[k]).join("")+sensors(d);
   document.getElementById("up").textContent=has(d.uptime_s)?"up "+dur(d.uptime_s):"";
+  document.getElementById("fw").textContent=(d.fw?"firmware "+d.fw+(d.fw_date?" ("+d.fw_date+")":""):"")+(d.reset?" · last reset: "+d.reset:"");
   const c=d.cpu;
   document.getElementById("cpu").textContent=c?"CPU core0 "+f(c.core0&&c.core0.load_pct,0,"%")+" · core1 "+f(c.core1&&c.core1.load_pct,0,"%")+" · "+f(c.die_temp_c,0,"°C"):"";
   const p=document.getElementById("pos");
   if(p)p.onclick=()=>{const t=f(cur.position.lat_deg,8)+","+f(cur.position.lon_deg,8);
-    if(navigator.clipboard)navigator.clipboard.writeText(t).catch(()=>{});};
+    OG.copyText(t).then(ok=>{copyNote=ok?"copied":"copy failed: select the numbers";copyAt=Date.now();showCopy();});};
+  showCopy();
 }
-async function poll(){
-  try{
-    const r=await fetch("/status.json",{cache:"no-store"});
-    if(r.ok){const d=await r.json();try{render(d);}catch(e){console.error(e);}last=Date.now();}
-  }catch(e){}
+/* The page is rebuilt every second, so the note is put back for 2 s. */
+let copyNote="",copyAt=0;
+function showCopy(){
+  const l=document.querySelector("#pos .lbl");
+  if(l&&Date.now()-copyAt<2000)l.insertAdjacentHTML("beforeend",'<span class="copied">'+E(copyNote)+'</span>');
+}
+/* The pill runs on its own timer, so it turns STALE even while a request hangs. */
+function age(){
   const a=document.getElementById("age"),s=last?(Date.now()-last)/1000:Infinity,live=s<2.5;
   a.textContent=live?"LIVE":last?"STALE "+Math.round(s)+" s":"OFFLINE";
   a.className="pill "+(live?"ok":"bad");
   document.body.classList.toggle("stale",!live&&!!last);
-  setTimeout(poll,1000);
 }
-poll();
+OG.poll(async()=>{const d=await OG.getJson("/status.json");last=Date.now();render(d);age();},1000);
+setInterval(age,500);
+OG.poll(async()=>{conf=await OG.getJson("/config.json");},15000);
 </script>
 </body>
 </html>

@@ -4,51 +4,51 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>OpenGINS calibration</title>
+<link rel="stylesheet" href="/common.css">
 <style>
-:root{--bg:#f5f6f8;--card:#fff;--fg:#1c1f24;--dim:#6b7280;--line:#e3e6ea;--ok:#15803d;--bad:#b91c1c;--acc:#1d4ed8;--warn:#a16207}
-@media (prefers-color-scheme:dark){:root{--bg:#111316;--card:#1b1e23;--fg:#e6e8eb;--dim:#9aa1ab;--line:#2b2f36;--ok:#4ade80;--bad:#f87171;--acc:#93b4ff;--warn:#facc15}}
-*{box-sizing:border-box}
-body{margin:0;padding:16px;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,sans-serif}
-header{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:baseline;margin-bottom:12px}
-h1{font-size:18px;margin:0}
-a{color:var(--acc)}
-main{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
-section{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
-h2{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);margin:0 0 6px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+main.cards{grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
+h2{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
 .tag{font-size:11px;text-transform:none;letter-spacing:0;padding:1px 6px;border-radius:9px;border:1px solid var(--line);color:var(--fg)}
 .tag.on{border-color:var(--ok);color:var(--ok)}.tag.hold{border-color:var(--warn);color:var(--warn)}
 h3{font-size:12px;color:var(--dim);margin:8px 0 2px;font-weight:600}
-table{width:100%;border-collapse:collapse}
-td{padding:2px 0;vertical-align:top;border-top:1px solid var(--line)}
-tr:first-child td{border-top:0}
-td:first-child{color:var(--dim);width:38%;padding-right:8px}
-td:last-child{font-variant-numeric:tabular-nums;word-break:break-word}
-.bar{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
-button{font:inherit;font-size:13px;padding:5px 10px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
-button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
-button:disabled{opacity:.45;cursor:default}
-#msg{min-height:1.4em;margin-bottom:8px}
-.note{color:var(--dim);font-size:12px}
+.prog{margin:4px 0 8px;font-size:14px}
+.prog li{margin:2px 0}
+.prog ul{margin:0;padding-left:18px}
+details{margin-top:6px}
+summary{cursor:pointer;color:var(--dim);font-size:13px}
+.bar{gap:6px;margin-top:10px}
+button{font-size:13px;padding:5px 10px}
+#msg{margin-bottom:8px}
+/* Stillness decides which buttons work, so it is shown big. */
+.still{padding:10px 12px;margin-bottom:10px;border-radius:10px;border:1px solid var(--line);border-left-width:8px;font-weight:700;font-size:15px}
+.still.yes{background:var(--okb);color:var(--ok);border-left-color:var(--ok)}
+.still.no{background:var(--warnb);color:var(--warn);border-left-color:var(--warn)}
+.still span{display:block;font-weight:400;font-size:13px;color:var(--fg)}
 .ok{color:var(--ok)}.bad{color:var(--bad);font-weight:600}.warn{color:var(--warn)}
 </style>
 </head>
 <body>
-<header><h1>OpenGINS · IMU calibration</h1><a href="/">status</a><a href="/status.html">details</a><a href="/config.html">config</a><span id="top" class="note">connecting…</span></header>
+<header><h1>OpenGINS</h1><span id="top" class="note">connecting…</span></header>
+<nav class="tabs"><a href="/">Status</a><a href="/status.html">Details</a><a href="/config.html">Config</a><a href="/calib.html" aria-current="page">Calibration</a></nav>
+<div id="still" class="still" hidden></div>
 <div id="msg"></div>
 <p class="note">Learned in the background. <b>auto</b>: each boot applies the fit of the data (after the range checks). <b>hold</b>: boot keeps the stored set until you accept. <b>Accept</b> and <b>Factory</b> change the correction at once and restart the filter, so the unit must be still.</p>
-<main id="main"></main>
+<main id="main" class="cards"></main>
 <div class="bar"><button type="button" id="all">Whole IMU calibration to factory</button></div>
+<script src="/common.js"></script>
 <script>
 "use strict";
 const GROUPS=[["gyr","Gyro bias vs temperature"],["acc","Accelerometer"],["mag","Magnetometer"],["gyr_m","Gyro scale and misalignment"],["pole","Pole axis (survey pole)"]];
 /* The pole axis changes without a filter restart: no stillness needed. */
 const NO_STILL=new Set(["pole"]);
-const HEAD=new Set(["mode","applied","stored","last","next_boot","accept_refused","use","learned","data"]);
 const msg=document.getElementById("msg");
-let busy=false,last=0,doc=null;
+let busy=false,last=0,doc=null,onAp=false;
 function say(t,c){msg.textContent=t;msg.className=c||"";}
+const E=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const has=v=>v!==null&&v!==undefined;
+const n1=v=>typeof v==="number"?(+v.toFixed(1)).toString():"—";
 function fmt(v){
-  if(v===null||v===undefined)return"—";
+  if(!has(v))return"—";
   if(Array.isArray(v)){
     if(v.length===9)return[0,3,6].map(i=>v.slice(i,i+3).join(" ")).join(" / ");
     return v.join("  ");
@@ -56,91 +56,127 @@ function fmt(v){
   if(typeof v==="boolean")return v?"yes":"no";
   return String(v);
 }
-function table(obj,skip){
-  const t=document.createElement("table");
-  for(const [k,v] of Object.entries(obj)){
-    if(skip&&skip.has(k))continue;
-    const r=t.insertRow();
-    r.insertCell().textContent=k.replace(/_/g," ");
-    r.insertCell().textContent=fmt(v);
-  }
-  return t;
+function table(obj){
+  return'<table>'+Object.entries(obj).map(([k,v])=>'<tr><td>'+E(k.replace(/_/g," "))+'</td><td>'+E(fmt(v))+'</td></tr>').join("")+'</table>';
 }
-function el(tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e;}
+/* Where each group stands, in words, from its "data" (and the hints the
+ * firmware gives in "state" and "accept_refused"). */
+function progress(key,g){
+  const d=g.data||{},o=[];
+  /* The "_boot" counters are what this boot added, not part of the total:
+   * the pose and magnetometer totals are bins, the boot counts samples. */
+  const added=b=>has(b)?" ("+b+" added this boot)":"";
+  if(key==="gyr"){
+    if(!d.chunks)o.push("No still periods yet: leave the unit still for 10 s or more.");
+    else o.push(d.chunks+" still periods"+added(d.chunks_boot)+", "+Math.round((d.still_s||0)/3600)+" h still in all.");
+    if(has(d.t_min_c)){
+      const span=d.t_max_c-d.t_min_c;
+      if(g.learned&&g.learned.k_fitted)o.push("Temperature slope fitted over "+n1(d.t_min_c)+" – "+n1(d.t_max_c)+" °C.");
+      else o.push("Temperature slope: needs a span of "+n1(d.k_min_span_c)+" °C, so far "+n1(span)+" °C ("+n1(d.t_min_c)+" – "+n1(d.t_max_c)+" °C). A cold start or a warm-up spreads it.");
+    }
+  }else if(key==="acc"){
+    const cov=has(d.coverage)?Math.min(1,d.coverage*3):0;
+    o.push((d.poses||0)+" orientation"+(d.poses===1?"":"s")+" with a still pose ("+(d.poses_boot||0)+" poses stored this boot); spread "+Math.round(cov*100)+" % of the way to all directions.");
+    if(cov<0.9)o.push("Turn the unit onto new sides (each face down, tilted between) and hold each still for 3 s or more.");
+  }else if(key==="mag"){
+    if(g.state)o.push(g.state.charAt(0).toUpperCase()+g.state.slice(1)+".");
+    o.push((d.samples||0)+" directions with a sample ("+(d.samples_boot||0)+" stored this boot"+(d.outliers?", "+d.outliers+" outliers dropped":"")+").");
+    o.push("Heading reference: "+(d.reference?d.reference+" fits":"none yet")+(d.yaw_from?" ("+d.yaw_from+")":"")+".");
+  }else if(key==="gyr_m"){
+    o.push((d.rotations||0)+" rotations between still poses"+added(d.rotations_boot)+(d.too_small?", "+d.too_small+" too small":"")+"; "+(d.turns||0)+" turns with a GNSS heading"+added(d.turns_boot)+".");
+    if(d.rotation_state&&d.rotation_state!=="idle")o.push("Now: "+d.rotation_state+(d.in_turn?", in a turn":"")+".");
+    else if(!d.rotations&&!d.turns)o.push("Turn the unit by 30° or more between two still poses, or drive full turns with a GNSS heading.");
+  }else if(key==="pole"){
+    o.push((d.episodes||0)+" planted episodes"+added(d.episodes_boot)+(d.dropped?", "+d.dropped+" dropped":"")+", "+n1(d.twist_deg)+"° of twist in all.");
+  }
+  if(!has(g.accept_refused))o.push("Accept: possible.");
+  else if(g.accept_refused!==g.state)o.push("Accept: not yet, "+g.accept_refused+".");
+  return'<div class="prog"><ul>'+o.map(x=>'<li>'+E(x)+'</li>').join("")+'</ul></div>';
+}
 function btn(label,group,op,enabled,why,confirmText,primary){
-  const b=el("button",label,primary?"primary":"");
-  b.type="button";b.disabled=!enabled||busy;if(why)b.title=why;
+  const b=document.createElement("button");
+  b.type="button";b.textContent=label;if(primary)b.className="primary";
+  b.disabled=!enabled||busy;if(why)b.title=why;
   b.addEventListener("click",()=>{if(!confirmText||confirm(confirmText))send({action:"calib",group:group,op:op});});
   return b;
 }
+/* Each group keeps its section; a part is rewritten only when its text
+ * changes, so an open "Numbers" stays open and text stays selectable. */
+const secs=new Map();
+function part(c,name,html){if(c.html[name]!==html){c.html[name]=html;c[name].innerHTML=html;}}
 function render(d){
   doc=d;
   const m=document.getElementById("main");
-  m.textContent="";
-  document.getElementById("top").textContent="record "+(d.record||"none")+" · TM210 id "+d.imu_id+" · "+(d.still?"still":"moving")+(d.unsaved?" · "+d.unsaved+" unsaved":"");
-  for(const [key,title] of GROUPS){
-    const g=d[key];
-    if(!g)continue;
-    const s=el("section");
-    const h=el("h2",title);
-    h.appendChild(el("span",g.applied?"in use":"none","tag"+(g.applied?" on":"")));
-    h.appendChild(el("span",g.mode,"tag"+(g.mode==="hold"?" hold":"")));
-    s.appendChild(h);
-    const info={last_change:g.last,next_boot:g.next_boot};
-    if(g.state)info.state=g.state;
-    info.accept=g.accept_refused===null?"possible":"no: "+g.accept_refused;
-    for(const [k,v] of Object.entries(g))if(!HEAD.has(k)&&k!=="state")info[k]=v;
-    s.appendChild(table(info));
-    for(const sub of ["use","learned","data"]){
-      if(!g[sub])continue;
-      s.appendChild(el("h3",sub==="use"?"in use":sub==="learned"?"learned (posterior)":"data"));
-      s.appendChild(table(g[sub]));
+  document.getElementById("top").textContent="record "+(d.record||"none")+" · TM210 id "+d.imu_id+(d.unsaved?" · "+d.unsaved+" unsaved":"");
+  const st=document.getElementById("still");
+  st.hidden=false;
+  st.className="still "+(d.still?"yes":"no");
+  st.innerHTML=d.still?"Still<span>Accept and Factory can be used.</span>":"Moving<span>Hold the unit still to accept a set or go back to factory (the pole axis excepted).</span>";
+  const keys=GROUPS.filter(([k])=>d[k]).map(([k])=>k);
+  for(const [k,c] of secs)if(!keys.includes(k)){c.sec.remove();secs.delete(k);}
+  keys.forEach((key,idx)=>{
+    const g=d[key],title=GROUPS.find(x=>x[0]===key)[1];
+    let c=secs.get(key);
+    if(!c){
+      const sec=document.createElement("section");
+      c={sec,html:{},head:document.createElement("h2"),prog:document.createElement("div"),
+         rows:document.createElement("div"),det:document.createElement("details"),nums:document.createElement("div"),bar:document.createElement("div")};
+      const sum=document.createElement("summary");sum.textContent="Numbers";
+      c.det.append(sum,c.nums);
+      c.bar.className="bar";
+      sec.append(c.head,c.prog,c.rows,c.det,c.bar);
+      if(key==="pole"){const p=document.createElement("p");p.className="note";
+        p.textContent="Learned while the pole stands on a point. Only a twist of the pole about its own axis shows the tilt: turn it slowly once on a point to speed this up. The length is only compared with the antenna height setting, never applied.";sec.appendChild(p);}
+      secs.set(key,c);
     }
-    const bar=el("div",undefined,"bar");
-    const still=d.still||NO_STILL.has(key);
-    const can=g.accept_refused===null&&still;
-    if(key==="pole")s.appendChild(el("p","Learned while the pole stands on a point. Only a twist of the pole about its own axis shows the tilt: turn it slowly once on a point to speed this up. The length is only compared with the antenna height setting, never applied.","note"));
-    bar.appendChild(btn("Accept now",key,"accept",can,g.accept_refused||(still?"":"hold the unit still"),
-      "Use the learned "+title.toLowerCase()+" now and store it?"+(NO_STILL.has(key)?"":" The filter restarts."),true));
-    bar.appendChild(g.mode==="hold"
-      ?btn("Auto",key,"auto",true,"","Let each boot apply the learned set again?")
-      :btn("Hold",key,"hold",true,"","Keep the stored set at every boot until you accept a new one?"));
-    bar.appendChild(btn("Clear data",key,"clear",true,"","Erase the collected "+title.toLowerCase()+" data? The set in use stays."));
-    bar.appendChild(btn("Factory",key,"factory",still,still?"":"hold the unit still",
-      "Erase the "+title.toLowerCase()+" data and stored set, no correction from now?"+(NO_STILL.has(key)?"":" The filter restarts.")));
-    s.appendChild(bar);
-    m.appendChild(s);
-  }
-  document.getElementById("all").disabled=busy||!d.still;
+    if(m.children[idx]!==c.sec)m.insertBefore(c.sec,m.children[idx]||null);
+    part(c,"head",E(title)+'<span class="tag'+(g.applied?" on":"")+'">'+(g.applied?"in use":"none")+'</span><span class="tag'+(g.mode==="hold"?" hold":"")+'">'+E(g.mode)+'</span>');
+    part(c,"prog",progress(key,g));
+    part(c,"rows",table({last_change:g.last,next_boot:g.next_boot}));
+    part(c,"nums",["use","learned","data"].filter(s=>g[s]).map(s=>'<h3>'+(s==="use"?"in use":s==="learned"?"learned (posterior)":"data")+'</h3>'+table(g[s])).join(""));
+    /* Buttons: rebuilt only when what they allow changes. */
+    const still=d.still||NO_STILL.has(key),can=g.accept_refused===null&&still;
+    const sig=[busy,still,can,g.mode,onAp,g.accept_refused].join("|");
+    if(c.html.bar!==sig){
+      c.html.bar=sig;c.bar.textContent="";
+      /* Over the open AP the unit takes only hold / auto (config_web.c). */
+      const ap=onAp?"refused over the open access point":"";
+      c.bar.append(
+        btn("Accept now",key,"accept",can&&!onAp,ap||g.accept_refused||(still?"":"hold the unit still"),
+          "Use the learned "+title.toLowerCase()+" now and store it?"+(NO_STILL.has(key)?"":" The filter restarts."),true),
+        g.mode==="hold"
+          ?btn("Auto",key,"auto",true,"","Let each boot apply the learned set again?")
+          :btn("Hold",key,"hold",true,"","Keep the stored set at every boot until you accept a new one?"),
+        btn("Clear data",key,"clear",!onAp,ap,"Erase the collected "+title.toLowerCase()+" data? The set in use stays."),
+        btn("Factory",key,"factory",still&&!onAp,ap||(still?"":"hold the unit still"),
+          "Erase the "+title.toLowerCase()+" data and stored set, no correction from now?"+(NO_STILL.has(key)?"":" The filter restarts.")));
+    }
+  });
+  const all=document.getElementById("all");
+  all.disabled=busy||!d.still||onAp;
+  all.title=onAp?"refused over the open access point":d.still?"":"hold the unit still";
 }
-async function getJson(u){const r=await fetch(u,{cache:"no-store"});return r.json();}
+const getJson=u=>OG.getJson(u);
 async function send(params){
   busy=true;if(doc)render(doc);
-  let prev=0;
-  try{prev=(await getJson("/config.json")).last_result.seq;}catch(e){}
   try{
-    const r=await fetch("/config",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams(params).toString()});
-    const j=await r.json();
-    if(!j.ok){say(j.error,"bad");busy=false;return;}
+    const j=await OG.postForm("/config",params);
+    if(!j.ok){say(j.error,"bad");busy=false;if(doc)render(doc);return;}
     say("sent…");
-    for(let i=0;i<20;i++){
-      await new Promise(r=>setTimeout(r,250));
-      try{const c=await getJson("/config.json");if(c.last_result.seq!==prev){const t=c.last_result.text;say(t,/^refused|failed/.test(t)?"bad":"ok");busy=false;poll(true);return;}}catch(e){}
-    }
+    const r=await OG.commandResult(j);
+    if(r){const t=r.text;say(t,/^refused|failed/.test(t)?"bad":/already/.test(t)?"warn":"ok");busy=false;poller.now();return;}
     say("no result from the unit","bad");
   }catch(e){say("no answer from the unit","bad");}
-  busy=false;
+  busy=false;if(doc)render(doc);
 }
 document.getElementById("all").addEventListener("click",()=>{
   if(confirm("Reset the whole IMU calibration to factory (all learned data and sets erased, no correction)? It applies at once and restarts the filter."))send({action:"calib_reset"});
 });
-let timer=0;
-async function poll(once){
-  try{render(await getJson("/calib.json"));last=Date.now();}catch(e){}
-  if(Date.now()-last>3000)document.getElementById("top").textContent="no update for "+Math.round((Date.now()-last)/1000)+" s";
-  if(!once){clearTimeout(timer);timer=setTimeout(poll,2000);}
-}
-poll();
+const poller=OG.poll(async()=>{const d=await getJson("/calib.json");last=Date.now();render(d);},2000);
+/* Whether this page came over the open AP, where the unit refuses all but hold / auto. */
+getJson("/status.json").then(s=>{onAp=!!(s.wifi&&s.wifi.state==="ap");if(doc)render(doc);}).catch(()=>{});
+/* On its own timer, so it shows even while a request hangs. */
+setInterval(()=>{if(last&&Date.now()-last>4500)document.getElementById("top").textContent="no update for "+Math.round((Date.now()-last)/1000)+" s";},500);
 </script>
 </body>
 </html>

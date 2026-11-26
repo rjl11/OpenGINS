@@ -1,7 +1,8 @@
 /*
  * Web config API (plans/web-config-server.md, Phase 4).
  *
- * GET  /config.json  the settings in use, the build defaults, which fields
+ * GET  /config.json  the settings in use, the build defaults, the float
+ *                    fields' limits (range: key -> [lo, hi]), which fields
  *                    wait for a reboot, and the result of the last command.
  * POST /config       form-encoded (application/x-www-form-urlencoded):
  *                    action=save|defaults|reboot|reconfigure_gnss|reconfigure_imu|
@@ -11,7 +12,19 @@
  *                    all only with factory),
  *                    and for save the fields named in config.html. A field
  *                    left out keeps its current value; sta_password is only
- *                    changed when sent.
+ *                    changed when sent. Optional rid=<1..2^32-1>: a POST
+ *                    with the rid and the same fields (in any order) as one
+ *                    of the last 8 accepted (kept through a reboot once it
+ *                    has run) is not queued again but answered
+ *                    {"ok":true,"repeat":"pending"|"done"}, with
+ *                    "result_seq" (its last_result seq) when it was done in
+ *                    this boot: a retry after a reply that never reached
+ *                    the page (common.js). last_result.rid in /config.json
+ *                    names the request a result belongs to.
+ *
+ * One command at a time: a POST is refused as busy from its acceptance until
+ * the main loop has reported its result, so a save always starts from the
+ * settings the one before it left.
  *
  * The POST handler runs in lwIP context: it parses and range-checks a save
  * and queues one command. The main loop takes it with config_web_take(),

@@ -157,6 +157,7 @@ static void filter_init(nav_antenna_t mode)
     pole_aid_reset(&s_pole, &pc, s_p.pole_aid, s_p.tip_leverarm_m, s_p.leverarm_m);
     s_work.dual = mode == NAV_ANT_DUAL;
     s_work.n_reinit++;
+    s_work.t_reinit_us = init.time;
     s_run_t0_us = 0;
 }
 

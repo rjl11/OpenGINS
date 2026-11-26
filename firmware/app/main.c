@@ -28,6 +28,7 @@
 #include "rtcm_src.h"
 #include "field_io.h"
 #include "front_imu.h"
+#include "fw_version.h"
 #include "geoid.h"
 #include "ground_point.h"
 #include "imu_calib.h"
@@ -35,6 +36,7 @@
 #include "nav_suite.h"
 #include "paogi.h"
 #include "pole_mount.h"
+#include "reset_reason.h"
 #include "settings.h"
 #include "tm210.h"
 #include "uart_dma.h"
@@ -1363,8 +1365,12 @@ static void publish_status_json(uint64_t now, uint32_t baro_hz)
     web_get_info(&wi);
     jw_init(&w, buf, sizeof buf);
     jw_obj(&w, NULL);
-    jw_str(&w, "fw", "OpenGINS demo");
+    jw_str(&w, "fw", app_fw_version);
+    jw_str(&w, "fw_date", app_fw_date);
+    jw_str(&w, "reset", reset_reason());
     jw_int(&w, "uptime_s", (long long)(now / 1000000u));
+    /* In effect since boot (the phone view orders its cards by it). */
+    jw_str(&w, "platform", settings_platform_name(settings_platform(&s_boot_settings)));
 
     char ip[16];
     const uint8_t *b = (const uint8_t *)&wi.ip;
@@ -1606,6 +1612,11 @@ static void publish_status_json(uint64_t now, uint32_t baro_hz)
         jw_int(&w, "speed", d.speed);
         jw_end(&w, '}');
         jw_int(&w, "reinits", o.n_reinit);
+        /* Since the last restart after the one at boot, so a page opened
+         * just after a restart still shows it (index.html). */
+        if (o.n_reinit > 1 && o.t_reinit_us != 0) {
+            jw_num(&w, "since_reinit_s", (double)(time_us_64() - o.t_reinit_us) * 1e-6, 1);
+        }
         jw_int(&w, "imu_age_ms", o.imu_age_ms);
         jw_bool(&w, "imu_lost", o.imu_age_ms < 0 || o.imu_age_ms >= POS_IMU_FRESH_MS);
         jw_int(&w, "imu_losses", o.n_imu_loss);
@@ -1817,6 +1828,8 @@ static void publish_calib_json(void)
         jw_num(&w, "t_min_c", (double)c.stats.t_min_c, 1);
         jw_num(&w, "t_max_c", (double)c.stats.t_max_c, 1);
     }
+    /* The span the slope needs, for calib.html's progress line. */
+    jw_num(&w, "k_min_span_c", (double)APP_CALIB_K_MIN_SPAN_C, 1);
     jw_num(&w, "still_s", (double)c.stats.still_s, 0);
     jw_int(&w, "skip_att", c.skip_att);
     jw_int(&w, "skip_temp", c.skip_temp);
@@ -2138,6 +2151,7 @@ static void handle_config_cmd(uint64_t now)
 
 int main(void)
 {
+    reset_reason_init();
     stdio_init_all();
 
     /* Give a terminal a moment to attach, so the provisioning log is seen. */
@@ -2146,6 +2160,8 @@ int main(void)
         sleep_ms(10);
     }
     printf("\nOpenGINS demo: TM210 + UM980 + BMP581 -> INSLIB nav_suite\n");
+    printf("firmware %s (%s), reset: %s (CHIP_RESET 0x%08lx)\n", app_fw_version, app_fw_date, reset_reason(),
+           (unsigned long)reset_reason_raw());
 
     /* Settings from flash, or the build defaults. A record that fails the
      * range check (e.g. written by an older build) is not used. */
